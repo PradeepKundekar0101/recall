@@ -1,0 +1,354 @@
+/* ============================================================
+   recall - operator console
+   An instrument panel for a call in flight, not a dashboard.
+   Everything on screen is telemetry off a live line, so the
+   data voice is monospace and the chrome stays out of its way.
+   ============================================================ */
+
+:root {
+  /* Ground: deep slate-navy rather than black. Black on a projector
+     crushes the field-state colours into each other; this holds them apart. */
+  --ground: #0e1420;
+  --panel: #151d2c;
+  --panel-2: #1b2637;
+  --rule: #24314a;
+  --rule-soft: #1d2740;
+
+  --ink: #e6edf7;
+  --ink-dim: #8296b4;
+  --ink-faint: #56698a;
+
+  /* Field states. Fixed by the brief; everything else defers to them. */
+  --st-empty: #5a6b85;
+  --st-prefilled: #4c8dff;
+  --st-asking: #f0a93b;
+  --st-captured: #f0a93b;
+  --st-confirmed: #3ecf8e;
+  --st-submitted: #2fae76;
+  --st-redacted: #ff5c5c;
+
+  --live: #3ecf8e;
+  --alarm: #ff5c5c;
+  --warn: #f0a93b;
+
+  --gutter: 16px;
+  --radius: 3px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-mono), ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Labels, eyebrows, panel headers. Condensed so a dense panel header
+   still reads from the back of a room. */
+.label {
+  font-family: var(--font-cond), system-ui, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+
+/* ---------- shell ---------- */
+
+.console {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100vh;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+.panes {
+  display: grid;
+  grid-template-columns: 30fr 40fr 30fr;
+  gap: 1px;
+  background: var(--rule-soft);
+  min-height: 0;
+}
+
+.pane {
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.pane-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--rule-soft);
+  flex: 0 0 auto;
+}
+
+.pane-body {
+  overflow-y: auto;
+  padding: 12px 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule) transparent;
+}
+
+/* ---------- lead + call bar ---------- */
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 12px 16px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--rule);
+}
+
+.bar-id {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.bar-meta { display: flex; gap: 18px; align-items: baseline; }
+
+.bar-spacer { flex: 1; }
+
+.stat { display: flex; flex-direction: column; gap: 2px; }
+.stat-value { font-size: 15px; font-variant-numeric: tabular-nums; }
+
+/* The TEST RUN banner is a guardrail made visible, so it is the one piece of
+   chrome allowed to shout. Diagonal hazard stripes, not a coloured pill. */
+.testrun {
+  padding: 5px 12px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  color: var(--warn);
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent 0 6px,
+    rgba(240, 169, 59, 0.09) 6px 12px
+  );
+}
+
+.status-dot {
+  display: inline-block;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--st-empty);
+  margin-right: 7px;
+  vertical-align: middle;
+}
+.status-live { background: var(--live); animation: pulse 1.6s ease-in-out infinite; }
+.status-handoff { background: var(--alarm); }
+.status-dialling { background: var(--warn); animation: pulse 0.9s ease-in-out infinite; }
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* ---------- transcript ---------- */
+
+.turn { margin-bottom: 12px; }
+.turn-head { display: flex; gap: 8px; align-items: baseline; margin-bottom: 2px; }
+.turn-who { font-family: var(--font-cond), sans-serif; text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; font-weight: 600; }
+.turn-agent .turn-who { color: var(--st-prefilled); }
+.turn-customer .turn-who { color: var(--ink-dim); }
+.turn-at { font-size: 10px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.turn-text { color: var(--ink); }
+/* Interim results stay grey until the transcript finalises. */
+.turn-interim .turn-text { color: var(--ink-faint); font-style: italic; }
+
+.tag {
+  display: inline-block;
+  font-family: var(--font-cond), sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--radius);
+  border: 1px solid currentColor;
+  margin-left: 6px;
+}
+.tag-guardrail { color: var(--alarm); }
+
+/* ---------- journey form ---------- */
+
+.section { margin-bottom: 14px; }
+.section-head {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 8px;
+}
+.section-rule { flex: 1; height: 1px; background: var(--rule); }
+
+.field {
+  display: grid;
+  grid-template-columns: minmax(9ch, 15ch) 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 4px 10px;
+  margin-bottom: 2px;
+  border-left: 2px solid var(--st-empty);
+  background: var(--panel-2);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.field:hover { background: #202c40; }
+.field:focus-visible { outline: 2px solid var(--st-prefilled); outline-offset: 1px; }
+
+.field-label { font-family: var(--font-cond), sans-serif; text-transform: uppercase; letter-spacing: 0.06em; font-size: 10px; color: var(--ink-faint); }
+.field-value { font-size: 13px; color: var(--ink); word-break: break-word; text-align: right; }
+.field-value:empty::before { content: "—"; color: var(--st-empty); }
+/* The confidence figure is called out loud during the demo, so it has to be
+   legible off a projector rather than tucked away as metadata. */
+.field-conf { font-size: 11px; color: var(--ink-dim); font-variant-numeric: tabular-nums; min-width: 4ch; text-align: right; }
+
+.f-empty     { border-left-color: var(--st-empty); }
+.f-prefilled { border-left-color: var(--st-prefilled); }
+.f-prefilled .field-value { color: var(--st-prefilled); }
+.f-asking    { border-left-color: var(--st-asking); animation: breathe 1.4s ease-in-out infinite; }
+.f-captured  { border-left-color: var(--st-captured); }
+.f-captured .field-value { color: var(--st-captured); }
+.f-confirmed { border-left-color: var(--st-confirmed); }
+.f-confirmed .field-value { color: var(--st-confirmed); }
+.f-submitted { border-left-color: var(--st-submitted); background: rgba(62, 207, 142, 0.08); }
+.f-redacted  { border-left-color: var(--st-redacted); }
+.f-redacted .field-value { color: var(--st-redacted); text-decoration: line-through; }
+
+@keyframes breathe {
+  0%, 100% { background: var(--panel-2); }
+  50%      { background: rgba(240, 169, 59, 0.14); }
+}
+
+/* ---------- escalation ----------
+   The signature element: six lanes, one per signal, each filling as
+   pressure builds. Judges see the meter climb two turns before the
+   handoff fires, which is the point of the robustness criterion. */
+
+.meter { margin-bottom: 11px; }
+.meter-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+.meter-name { font-family: var(--font-cond), sans-serif; text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; font-weight: 600; color: var(--ink-dim); }
+.meter-score { font-size: 10px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+
+.lane {
+  position: relative;
+  height: 5px;
+  background: #1f2a40;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.lane-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--st-asking);
+  transition: width 260ms ease;
+}
+.lane-fired .lane-fill { background: var(--alarm); }
+.meter-fired .meter-name { color: var(--alarm); }
+.meter-evidence { font-size: 10px; color: var(--ink-faint); margin-top: 3px; }
+
+.sentiment {
+  position: relative;
+  height: 6px;
+  background: var(--rule-soft);
+  border-radius: 3px;
+  margin: 6px 0 14px;
+}
+/* Centre tick marks neutral, so a negative reading reads as a direction. */
+.sentiment::after {
+  content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px;
+  width: 1px; background: var(--ink-faint);
+}
+.sentiment-needle {
+  position: absolute; top: -3px; width: 2px; height: 12px;
+  background: var(--ink); border-radius: 1px;
+  transition: left 260ms ease;
+}
+
+.handoff-banner {
+  border: 1px solid var(--alarm);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  color: var(--alarm);
+  background: rgba(255, 92, 92, 0.08);
+}
+
+/* ---------- payload drawer ---------- */
+
+.drawer {
+  background: var(--panel-2);
+  border-top: 1px solid var(--rule);
+  flex: 0 0 auto;
+}
+.drawer-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 16px;
+  cursor: pointer;
+  width: 100%;
+  background: none; border: 0; color: inherit; font: inherit;
+  text-align: left;
+}
+.drawer-body {
+  max-height: 210px; overflow: auto;
+  padding: 0 16px 12px;
+  font-size: 11px;
+  color: var(--ink-dim);
+  white-space: pre;
+}
+.drawer-ok { color: var(--st-confirmed); }
+.drawer-err { color: var(--alarm); }
+
+/* ---------- handoff console ---------- */
+
+.handoff {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 28px var(--gutter) 60px;
+}
+.handoff-reason {
+  border: 1px solid var(--alarm);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin-bottom: 22px;
+  background: rgba(255, 92, 92, 0.07);
+}
+.handoff-continue {
+  border: 1px solid var(--st-confirmed);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  color: var(--st-confirmed);
+  margin-bottom: 22px;
+}
+.handoff-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+
+.empty {
+  color: var(--ink-faint);
+  padding: 24px 0;
+  max-width: 44ch;
+}
+
+/* ---------- responsive ----------
+   The console targets a 1440px projector, but the handoff view gets
+   opened on whatever laptop is nearest, so it has to hold up narrow. */
+@media (max-width: 1100px) {
+  .panes { grid-template-columns: 1fr; grid-template-rows: auto auto auto; }
+  .console { height: auto; min-height: 100vh; }
+  .pane-body { max-height: 46vh; }
+  .handoff-grid { grid-template-columns: 1fr; }
+  .bar { flex-wrap: wrap; gap: 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
