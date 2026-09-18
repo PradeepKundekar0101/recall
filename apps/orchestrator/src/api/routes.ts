@@ -99,7 +99,20 @@ api.post("/calls", async (req, res) => {
   const call = await startCall({ lead, journey, personaId: req.body?.persona });
   log.call(call.callId, `dialling ${lead.phone} in ${call.mode} mode over ${env.transport}`);
 
-  res.status(201).json({ call_id: call.callId, mode: call.mode, transport: env.transport });
+  // `simulated` is spelled out rather than left to be inferred from
+  // transport:"sim". A simulated dial returns a perfectly healthy 201 and rings
+  // nothing, which is indistinguishable from a real call that failed to connect
+  // unless the response says so plainly.
+  res.status(201).json({
+    call_id: call.callId,
+    mode: call.mode,
+    transport: env.transport,
+    simulated: env.transport !== "pstn" || env.mockVoice,
+    dialled: env.transport === "pstn" && !env.mockVoice ? lead.phone : null,
+    ...(env.transport !== "pstn" || env.mockVoice
+      ? { note: "No phone was dialled. Set TRANSPORT=pstn and MOCK_VOICE=0 for a real call." }
+      : {}),
+  });
 });
 
 /** Hang up a live call from the console. */

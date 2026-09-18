@@ -80,8 +80,9 @@ export class SimTransport implements Transport {
     log.call(this.id, `sim transport - persona "${this.opts.persona.id}"`);
   }
 
-  async speak(text: string): Promise<void> {
+  async speak(text: string, opts: { onFirstAudio?: () => void } = {}): Promise<void> {
     if (this.dead) return;
+    opts.onFirstAudio?.();
     this.spoken.push(text);
     log.call(this.id, `agent: ${text}`);
 

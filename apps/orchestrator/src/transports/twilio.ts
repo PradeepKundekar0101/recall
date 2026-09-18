@@ -237,7 +237,8 @@ export class TwilioTransport implements Transport {
           }
           this.utteranceCb?.(text, confidence);
         },
-        onError: (err) => log.call(this.id, `stt: ${err.message}`),
+        onError: (err) => log.call(this.id, `stt error: ${err.message}`),
+        onClose: () => log.call(this.id, "stt socket closed"),
       },
     });
   }
@@ -255,7 +256,7 @@ export class TwilioTransport implements Transport {
     this.endedCb = cb;
   }
 
-  async speak(text: string): Promise<void> {
+  async speak(text: string, opts: { onFirstAudio?: () => void } = {}): Promise<void> {
     if (this.dead) return;
 
     // Never drop a line because the stream was a beat late.
@@ -293,6 +294,7 @@ export class TwilioTransport implements Transport {
       if (!started) {
         this.speaking = true;
         started = true;
+        opts.onFirstAudio?.();
       }
 
       for (let off = 0; off < audio.length; off += FRAME_BYTES) {
@@ -538,20 +540,43 @@ export function splitForTts(text: string): string[] {
   return parts.length ? parts : [text.trim()];
 }
 
+/** Scribe rejects the whole connection if any keyterm exceeds this. */
+const MAX_KEYTERM_CHARS = 20;
+
 /**
- * Bias recognition toward the words this call will actually contain: the customer's
- * own name and suburb, the plan they were looking at, and every enum value in the
- * journey. Postcodes and NMIs are spelled out rather than recognised as words.
+ * Bias recognition toward the words this call will actually contain.
+ *
+ * Only things a person says out loud. Emails, phone numbers, dates and plan ids
+ * are values, not vocabulary - they are spelled or read digit by digit, so they
+ * help recognition not at all, and one of them cost a live call: an email in the
+ * prefill became a 24-character keyterm and Scribe rejected the entire socket
+ * with `invalid_request`, which surfaced as the agent greeting the customer and
+ * then never hearing a word.
+ *
+ * Over-length terms are dropped rather than truncated. A truncated keyterm is a
+ * word the model is being told to expect and will never hear.
  */
 export function recognitionKeywords(deps: TransportDeps): string[] {
-  const enums = deps.journey.fields.flatMap((f) => f.options ?? []);
-  const prefill = Object.values(deps.lead.prefill)
-    .filter((v): v is string => typeof v === "string")
-    .filter((v) => v.length > 2 && !/^\d+$/.test(v));
-  return [deps.lead.full_name, deps.lead.plan_name ?? "", ...prefill, ...enums]
-    .flatMap((s) => s.split(/\s+/))
-    .filter((w) => w.length > 2)
-    .slice(0, 50);
+  const spoken = [
+    deps.lead.full_name,
+    deps.lead.plan_name ?? "",
+    // Prefilled text the customer might repeat: a suburb, a street name. Values
+    // that are read out character by character are excluded below.
+    ...Object.entries(deps.lead.prefill)
+      .filter(([id]) => !["email", "phone", "dob", "postcode", "nmi", "plan_id"].includes(id))
+      .map(([, value]) => (typeof value === "string" ? value : "")),
+    // Enum options are answers people say: "electricity", "both", "pension".
+    ...deps.journey.fields.flatMap((f) => f.options ?? []),
+  ];
+
+  const words = spoken
+    .flatMap((s) => s.split(/[\s_]+/))
+    .map((w) => w.replace(/[^\p{L}\p{N}'-]/gu, "").trim())
+    .filter((w) => w.length > 2 && w.length <= MAX_KEYTERM_CHARS)
+    // A bare number is never a useful hint; it is dictated, not recognised.
+    .filter((w) => !/^\d+$/.test(w));
+
+  return [...new Set(words)].slice(0, 50);
 }
 
 export function escapeXml(s: string): string {

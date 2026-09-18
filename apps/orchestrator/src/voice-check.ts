@@ -3,6 +3,9 @@ import { resolve } from "node:path";
 import { env, has } from "./env.js";
 import { synthesize } from "./voice/tts.js";
 import { openStt } from "./voice/stt.js";
+import { recognitionKeywords } from "./transports/twilio.js";
+import { loadJourney } from "./journey/index.js";
+import { loadLeads } from "./leads/index.js";
 
 /**
  * `pnpm voice:check` - the vendor smoke test.
@@ -106,9 +109,24 @@ async function main(): Promise<void> {
   const errors: string[] = [];
 
   const started = Date.now();
+  /**
+   * The real keyword list, not a hand-picked pair.
+   *
+   * This check passed with two tidy keywords while a live call was being rejected
+   * outright, because the transport builds its list from the lead and the journey
+   * and one entry was over Scribe's 20-character limit. A preflight that does not
+   * send what the call sends is not a preflight.
+   */
+  const keywords = recognitionKeywords({
+    journey: loadJourney(),
+    lead: loadLeads()[0]!,
+    callId: "voice-check",
+  });
+  console.log(`      ${keywords.length} recognition keyterms from the journey and lead`);
+
   const session = await openStt({
     label: "voice-check",
-    keywords: ["Wattle", "Parramatta"],
+    keywords,
     events: {
       onPartial: () => {
         partials++;

@@ -20,19 +20,27 @@ import type { Form } from "./fact-bus.js";
  * Thresholds on the rescaled confidence, where 1.0 is as good as the model gets
  * on clean audio. See `voice/stt/scribe.ts` for how the scale is derived.
  *
- * These are deliberately permissive, and that is a finding rather than a
- * concession. Measured with `pnpm voice:calibrate`, clean and lightly degraded
- * audio overlap: clean scored 0.46-0.63 raw and degraded 0.32-0.53, so confidence
- * alone cannot reliably separate a good answer from a bad one. A tight gate would
- * mostly re-ask correct answers, which is a worse call than occasionally reading
- * back a wrong one.
+ * Retuned against a real phone call rather than synthetic speech. Six turns over
+ * PSTN, every one transcribed correctly, scored: 1.00, 0.55, 0.69, 0.85, 1.00,
+ * 1.00. A floor of 0.55 sat exactly on top of a correct answer, so genuine speech
+ * would have been rejected and re-asked on a working line - the failure mode that
+ * makes an agent sound like it is not listening.
  *
- * Read-back is therefore the real gate. Confidence only catches the turns that
- * are genuinely broken, and feeds the escalation meter.
+ * They are permissive on purpose, and that is a finding rather than a
+ * concession. Clean and degraded audio overlap (see `pnpm voice:calibrate`), so
+ * confidence cannot reliably separate a good answer from a bad one. A tight gate
+ * mostly re-asks correct answers, which is worse than occasionally reading back a
+ * wrong one - and the read-back is what catches that.
+ *
+ * Read-back is therefore the real gate. Confidence only catches turns that are
+ * genuinely broken, and feeds the escalation meter.
+ *
+ * Six turns is a small sample. Re-run `pnpm voice:calibrate` and widen these if
+ * rehearsal produces re-asks on answers that sounded fine.
  */
-export const CONFIDENCE_FLOOR = 0.55;
+export const CONFIDENCE_FLOOR = 0.35;
 /** Two turns under this on the same field is the LOW CONF escalation signal. */
-export const LOW_CONFIDENCE = 0.45;
+export const LOW_CONFIDENCE = 0.25;
 
 export type RawPatch = {
   field: string;

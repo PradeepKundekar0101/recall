@@ -18,8 +18,15 @@ export interface Transport {
   /** Dial / connect. Resolves once the far end is actually listening. */
   start(): Promise<void>;
 
-  /** Say something. Resolves when playback finishes or is cut short by barge-in. */
-  speak(text: string): Promise<void>;
+  /**
+   * Say something. Resolves when playback finishes or is cut short by barge-in.
+   *
+   * `onFirstAudio` fires when the first frame reaches the wire. That is the
+   * moment the customer stops hearing silence, and it is the only latency number
+   * worth quoting - measuring to the end of playback measures how long the agent
+   * talked for, not how quickly it answered.
+   */
+  speak(text: string, opts?: { onFirstAudio?: () => void }): Promise<void>;
 
   /**
    * Say a reply that is still being generated.
