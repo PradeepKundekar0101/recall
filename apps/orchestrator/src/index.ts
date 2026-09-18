@@ -5,6 +5,8 @@ import { WebSocketServer } from "ws";
 import { api } from "./api/routes.js";
 import { attachMediaStream } from "./transports/twilio.js";
 import { loadJourney } from "./journey/index.js";
+import { JourneyState } from "./engine/journey-state.js";
+import { prerender } from "./voice/tts.js";
 import { loadLeads } from "./leads/index.js";
 import { bus } from "./events.js";
 import { recordEvent } from "./db/repo.js";
@@ -55,7 +57,24 @@ server.on("upgrade", (req, socket, head) => {
 // Every event that reaches the console is also written to the audit trail. The
 // console is fed directly from the bus, so a Supabase outage slows the paperwork
 // and never the call.
-if (has.supabase()) bus.subscribeAll((event) => void recordEvent(event));
+if (has.supabase()) {
+  bus.subscribeAll((event) => {
+    // Defensive on purpose. The audit trail is paperwork and the call is the
+    // demo, so nothing on this path is allowed to reach the event loop as a
+    // throw - a Supabase wobble must not end a call that is on speakerphone in
+    // front of judges.
+    try {
+      void recordEvent(event).catch((err) => log.warn(`audit write failed: ${String(err)}`));
+    } catch (err) {
+      log.warn(`audit write threw: ${String(err)}`);
+    }
+  });
+}
+
+// Last line of defence. An unhandled rejection anywhere must not take the
+// orchestrator down mid-call.
+process.on("unhandledRejection", (reason) => log.error(`unhandled rejection: ${String(reason)}`));
+process.on("uncaughtException", (err) => log.error(`uncaught exception: ${err.message}`));
 
 /**
  * Validate the journey before listening.
@@ -75,10 +94,17 @@ try {
 const leads = loadLeads();
 
 server.listen(env.port, () => {
-  log.info(`recall orchestrator on :${env.port}`);
+  log.info(`RECALL orchestrator on :${env.port}`);
   for (const line of bootReport()) log.info(`  ${line}`);
   log.info(`  ${journeyLine}`);
   log.info(`  leads      ${leads.length} synthetic${env.testNumbers[0] ? ` -> ${env.testNumbers[0]}` : " (NO TEST NUMBER SET)"}`);
+
+  // Pre-render the fixed lines after the port is open, not before. A cold TTS
+  // cache costs one synthesis on the first call; a boot that blocks on ElevenLabs
+  // costs the whole demo if their API is having a moment.
+  void prerender(JourneyState.fixedLines(loadJourney())).catch((err) =>
+    log.warn(`pre-render failed, fixed lines will synthesise on demand: ${String(err)}`)
+  );
 });
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {

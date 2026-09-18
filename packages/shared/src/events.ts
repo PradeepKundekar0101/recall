@@ -62,6 +62,12 @@ export type CallEvent =
       status: number;
       body: unknown;
     })
+  /**
+   * One turn's measured round trip, customer end-of-speech to agent audio.
+   * Echo mode emits one per turn; the journey engine emits one per reply. The
+   * rehearsal checklist asserts a median under 800 ms on these.
+   */
+  | (Base & { type: "latency.turn"; ms: number; utterance: string; over_budget: boolean })
   /** Top-right counter: the 25% criterion, said out loud during the demo. */
   | (Base & {
       type: "metrics.update";

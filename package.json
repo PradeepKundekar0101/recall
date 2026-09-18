@@ -2,7 +2,7 @@
   "name": "recall",
   "private": true,
   "version": "0.1.0",
-  "description": "CIMET Voice Recovery Agent - outbound AI voice agent that recovers dropped-off Energy leads.",
+  "description": "RECALL (Recovery Call) - outbound AI voice agent that recovers dropped-off Energy leads.",
   "packageManager": "pnpm@10.31.0",
   "scripts": {
     "dev": "pnpm --parallel --filter \"./apps/*\" dev",

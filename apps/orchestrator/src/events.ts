@@ -10,8 +10,17 @@ import type { CallEvent } from "@recall/shared";
  * exactly the evidence the Guardrails criterion asks for.
  */
 
-/** Everything but `call_id` and `ts`, which the bus stamps on. */
-export type EmittedEvent = Omit<CallEvent, "call_id" | "ts"> extends infer T ? T : never;
+/**
+ * Everything but `call_id` and `ts`, which the bus stamps on.
+ *
+ * `Omit` has to distribute over the union by hand. A plain
+ * `Omit<CallEvent, "call_id" | "ts">` collapses to the keys every variant shares,
+ * which is none of them - so every emit site fails to typecheck against a type
+ * that looks correct.
+ */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+export type EmittedEvent = DistributiveOmit<CallEvent, "call_id" | "ts">;
 
 class CallBus extends EventEmitter {
   private history = new Map<string, CallEvent[]>();
@@ -21,7 +30,7 @@ class CallBus extends EventEmitter {
     this.setMaxListeners(200);
   }
 
-  emitEvent(callId: string, event: Omit<CallEvent, "call_id" | "ts">): CallEvent {
+  emitEvent(callId: string, event: EmittedEvent): CallEvent {
     const stamped = { ...event, call_id: callId, ts: Date.now() } as CallEvent;
     const log = this.history.get(callId) ?? [];
     log.push(stamped);

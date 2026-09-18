@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import type { Journey, Lead } from "@recall/shared";
 import { getJson, postJson } from "../lib/api";
-import { blankForm, useCallStream } from "../lib/useCallStream";
+import { blankForm, medianLatency, useCallStream } from "../lib/useCallStream";
 import { JourneyForm } from "../components/JourneyForm";
 import { Transcript } from "../components/Transcript";
 import { EscalationPanel } from "../components/EscalationPanel";
@@ -39,6 +39,9 @@ export default function OperatorConsole() {
   }, [call.status]);
 
   const lead = leads.find((l) => l.id === selectedLead) ?? null;
+  const median = medianLatency(call.latencies);
+  // 800ms is the budget; past a second the call stops feeling like a conversation.
+  const overBudget = median !== null && median > 1000;
   const form = Object.keys(call.form).length ? call.form : blankForm(journey);
 
   async function dial() {
@@ -68,6 +71,11 @@ export default function OperatorConsole() {
   return (
     <div className="console">
       <header className="bar">
+        <div className="wordmark">
+          RECALL
+          <span className="wordmark-sub">recovery call</span>
+        </div>
+
         <div>
           <div className="label">Lead</div>
           <div className="bar-id">{lead ? `${lead.id} · ${lead.full_name}` : "no lead"}</div>
@@ -75,7 +83,7 @@ export default function OperatorConsole() {
 
         <div className="bar-meta">
           <div className="stat">
-            <span className="label">Dropped at</span>
+            <span className="label">Dropped</span>
             <span className="stat-value">{lead?.last_completed_step ?? "—"}</span>
           </div>
           <div className="stat">
@@ -89,6 +97,15 @@ export default function OperatorConsole() {
           <div className="stat">
             <span className="label">Elapsed</span>
             <span className="stat-value">{mmss(elapsed)}</span>
+          </div>
+          <div className="stat">
+            <span className="label">Turn latency</span>
+            <span
+              className="stat-value"
+              style={{ color: overBudget ? "var(--alarm)" : undefined }}
+            >
+              {median === null ? "—" : `${median}ms`}
+            </span>
           </div>
           <div className="stat">
             <span className="label">Hands-free</span>
@@ -120,22 +137,11 @@ export default function OperatorConsole() {
           ))}
         </select>
 
-        <button className="drawer-head" style={{ width: "auto", padding: "6px 10px", border: "1px solid var(--rule)", borderRadius: "var(--radius)" }} onClick={addToDnc}>
+        <button className="bar-btn" onClick={addToDnc}>
           Add to DNC
         </button>
 
-        <button
-          className="drawer-head"
-          style={{
-            width: "auto",
-            padding: "6px 14px",
-            border: "1px solid var(--live)",
-            borderRadius: "var(--radius)",
-            color: "var(--live)",
-          }}
-          onClick={dial}
-          disabled={!lead}
-        >
+        <button className="bar-btn bar-btn-go" onClick={dial} disabled={!lead}>
           Dial
         </button>
 

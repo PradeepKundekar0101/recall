@@ -1,5 +1,6 @@
-# recall
+# RECALL
 
+**RECALL** (Recovery Call).
 Outbound AI voice agent that calls a dropped-off Energy lead, picks the comparison journey up where the customer left it, collects the remaining fields by phone, submits a valid payload to CIMET's journey sandbox, and hands the call to a human with full context the moment the conversation turns.
 
 Built on the `buildin-hours` codebase (Panchayat AI).
@@ -7,8 +8,11 @@ Telephony, the transport seam, the SSE board and the eval harness are reused; Sa
 
 ## Status
 
-Project setup is complete and verified.
-The voice loop and the dialogue turn loop are the next build blocks and are deliberately unimplemented - they throw a named error rather than pretending to work.
+Infrastructure is built and verified dry.
+The remaining gap is a real call: no vendor keys are set, so nothing below has been exercised against live audio yet.
+
+**Tonight's target** is `CALL_MODE=echo` over a real phone: the agent repeats back what Scribe heard, under 1 s round trip.
+Set the three keys, `MOCK_VOICE=0`, `TRANSPORT=pstn`, point ngrok at :8080, and press Dial.
 
 | Area | State |
 | --- | --- |
@@ -19,8 +23,11 @@ The voice loop and the dialogue turn loop are the next build blocks and are deli
 | Guardrails: DNC, test-number, consent gate, card detection, decline | done |
 | Sandbox mapping, incremental + final submit, mock server | done |
 | Operator console, handoff console | done |
-| Deepgram STT / ElevenLabs TTS sockets | build block P3 |
-| Dialogue turn loop | build block 0:15-1:30 |
+| Scribe v2 Realtime STT, Deepgram fallback | written, unverified against live audio |
+| ElevenLabs Flash v2.5 TTS, disk pre-render | written, unverified against live audio |
+| Dialogue engine, barge-in cancellation, silence handling | done |
+| Echo mode and per-turn latency measurement | done |
+| Energy scripts and field list | placeholder until the recording arrives |
 
 ## Getting started
 
@@ -31,6 +38,21 @@ Node 22 and above ship a global `WebSocket` that silently drops the options argu
 nvm use && corepack pnpm install
 ```
 
+### Providers
+
+Every vendor sits behind an env switch, so swapping one is a config change rather than a code change.
+
+| Switch | Options | Notes |
+| --- | --- | --- |
+| `STT_PROVIDER` | `scribe` (default), `deepgram` | Scribe is the build target. Both take Twilio's audio natively, so there is no transcode either way. |
+| `LLM_PROVIDER` | `anthropic`, `openai`, `gemini` | Blank means whichever key is set wins. Reasoning is off on all three. |
+| `CALL_MODE` | `echo`, `journey` | `echo` repeats back what STT heard. It is the infrastructure check. |
+| `TRANSPORT` | `sim`, `pstn` | `sim` runs the exact engine against scripted personas without dialling. |
+
+**Gemini is wired but never selected implicitly.**
+Its published time-to-first-token at default thinking levels is an order of magnitude outside this project's 250 ms budget, and it has been stalling upstream.
+It runs with `thinkingBudget: 0`; switch to it only after measuring in rehearsal.
+
 Copy the env template and fill in the voice keys:
 
 ```bash
@@ -38,7 +60,7 @@ cp .env.example .env
 ```
 
 Twilio and Supabase credentials are already carried over.
-`DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` and `LLM_API_KEY` still need filling, along with `HANDOFF_NUMBER` for the warm-transfer demo.
+`ELEVENLABS_API_KEY` (used by both Scribe and Flash), `ELEVENLABS_VOICE_ID` and one LLM key still need filling, along with `HANDOFF_NUMBER` for the warm-transfer demo.
 
 Run everything:
 
@@ -97,11 +119,28 @@ No script and no model output can bypass them:
 `engine/normalise.ts` owns dates, phone numbers, emails, postcodes and NMIs.
 A model that is occasionally and confidently wrong about a date is worse than a parser that fails loudly.
 
+**Disconnects are the normal case, not an exception.**
+Every confirmed field is written to `call_events` the moment it is confirmed, so a call that drops after section three leaves three sections of real data behind.
+`finalise()` is idempotent because the media stream's `stop` and Twilio's `completed` status callback race on every real call, in no guaranteed order.
+Silence on an open question nudges at 6 s and 12 s, then closes as `abandoned`.
+
 **Confidence multiplies rather than averages.**
 The extractor's own score is multiplied by the STT word confidence over the evidence span, so a confidently-extracted mishearing still fails the 0.85 floor and gets re-asked instead of written.
 
 ## Known gaps
 
+- **Nothing has been exercised against live audio.** The STT and TTS clients are written against the published protocols and typecheck, but no key has been set, so the first real call is also the first test of them.
 - `TEST_NUMBERS` currently holds an Indian number carried over from the old project. Replace it with the AU test numbers the organisers provide.
-- `@supabase/supabase-js` warns that Node 20 is deprecated. It is a warning, not a failure, and the Node 20 pin is the more important constraint.
-- The manual baseline for the efficiency counter is hard-coded to zero until it can be measured from CIMET's recording.
+- The Energy field list and scripts in `energy.journey.json` are placeholders, pending the recording.
+- The manual baseline for the efficiency counter is zero until it can be measured, rather than a number invented to make the comparison look good.
+- 7 of the 10 eval personas need a live model; a dry run scores only the 3 rule-decided ones and says so.
+
+## Node 20, and why Supabase nearly broke it
+
+Node 20 is pinned because Node 22+ ships a global `WebSocket` that ignores the options argument, which silently drops the auth headers on the Scribe and ElevenLabs sockets.
+
+`@supabase/realtime-js` has the opposite requirement: it throws outright when there is no native global `WebSocket`, and it is constructed eagerly inside `createClient`.
+That killed the orchestrator on the first audit write.
+
+The fix is to hand Supabase the `ws` package explicitly (`realtime: { transport: WebSocket }`), which is the same implementation every other socket here uses.
+Upgrading to Node 22 would also satisfy Supabase and would reintroduce the header bug, so it is the wrong fix.

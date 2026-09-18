@@ -40,6 +40,20 @@ export const assertions: Record<string, PersonaAssertion> = {
 
 export const personas: Persona[] = [
   {
+    /**
+     * Not a journey persona. Unconditional turns, so it answers whatever the echo
+     * loop says and the voice path can be exercised end to end without dialling.
+     */
+    id: "echo",
+    label: "Echo check",
+    expect: "Every line is repeated back, median round trip under 1s",
+    turns: [
+      { say: "Testing, one two three." },
+      { say: "Forty two Wattle Street, Parramatta." },
+      { say: "My postcode is two one five zero." },
+    ],
+  },
+  {
     id: "cooperative",
     label: "Cooperative",
     expect: "Journey submitted, 0 re-asks",

@@ -8,6 +8,8 @@ import { loadLeads, leadById } from "../leads/index.js";
 import { addToDnc, canDial, dncList, optOutList, onDncRegister } from "../policy.js";
 import { liveTwilioTransports, escapeXml } from "../transports/twilio.js";
 import { latencyMedian } from "../voice/llm.js";
+import { startCall, getCall } from "../calls.js";
+import { cachedLineCount } from "../voice/tts.js";
 
 export const api = Router();
 
@@ -34,6 +36,7 @@ api.get("/health", (_req, res) => {
       handoff: has.handoff(),
     },
     latency_median_ms: latencyMedian(),
+    prerendered_lines: cachedLineCount(),
     boot: bootReport(),
   });
 });
@@ -79,7 +82,7 @@ api.get("/policy", (_req, res) => {
  * The guardrail check runs before a call id is even minted, so a refused dial
  * produces a clean 403 the console can render rather than a half-open call.
  */
-api.post("/calls", (req, res) => {
+api.post("/calls", async (req, res) => {
   const leadId = String(req.body?.lead_id ?? "");
   const lead = leadById(leadId);
   if (!lead) return res.status(404).json({ error: `unknown lead ${leadId}` });
@@ -90,13 +93,21 @@ api.post("/calls", (req, res) => {
     return res.status(403).json({ error: decision.reason, guardrail: decision.reason.split(":")[0] });
   }
 
-  const callId = randomUUID();
-  // Build block 0:15-1:30 wires the dialogue engine in here. The route, the
-  // guardrail gate and the event stream are already the shape it needs.
-  res.status(501).json({
-    call_id: callId,
-    error: "call orchestration not implemented yet (build block 0:15-1:30)",
-  });
+  void randomUUID; // ids are minted inside startCall, alongside the call row
+
+  const journey = loadJourney();
+  const call = await startCall({ lead, journey, personaId: req.body?.persona });
+  log.call(call.callId, `dialling ${lead.phone} in ${call.mode} mode over ${env.transport}`);
+
+  res.status(201).json({ call_id: call.callId, mode: call.mode, transport: env.transport });
+});
+
+/** Hang up a live call from the console. */
+api.post("/calls/:callId/hangup", async (req, res) => {
+  const call = getCall(req.params.callId);
+  if (!call) return res.status(404).json({ error: "no such live call" });
+  await call.finish("incomplete");
+  res.json({ ok: true });
 });
 
 /** The console's whole data path. Replays from the start, so a late tab sees it all. */
@@ -147,8 +158,22 @@ api.post("/twilio/amd/:callId", (req, res) => {
   res.sendStatus(204);
 });
 
-api.post("/twilio/status/:callId", (req, res) => {
-  liveTwilioTransports.get(req.params.callId)?.notifyStatus(String(req.body?.CallStatus ?? ""));
+/**
+ * Twilio's status callback.
+ *
+ * This and the media stream's `stop` message race on every real call, and neither
+ * ordering is guaranteed. Both route into the same idempotent finish(), so
+ * whichever arrives second is a no-op rather than a double-close.
+ */
+api.post("/twilio/status/:callId", async (req, res) => {
+  const callId = req.params.callId;
+  const status = String(req.body?.CallStatus ?? "");
+  liveTwilioTransports.get(callId)?.notifyStatus(status);
+
+  if (status === "completed" || status === "failed" || status === "no-answer" || status === "busy") {
+    const call = getCall(callId);
+    if (call) await call.finish(status === "completed" ? "incomplete" : "no_answer");
+  }
   res.sendStatus(204);
 });
 

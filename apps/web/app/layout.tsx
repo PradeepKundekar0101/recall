@@ -23,7 +23,7 @@ const condensed = IBM_Plex_Sans_Condensed({
 });
 
 export const metadata: Metadata = {
-  title: "recall - operator console",
+  title: "RECALL - operator console",
   description: "Live view of an AI voice agent recovering a dropped-off energy lead.",
 };
 

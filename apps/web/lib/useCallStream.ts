@@ -42,6 +42,8 @@ export type CallState = {
   guardrails: { guardrail: string; detail: string; at: number }[];
   submissions: { step: string; status: number; body: unknown }[];
   metrics: { handsFree: number; total: number; durationS: number; baselineS: number } | null;
+  /** Per-turn round trips, newest last. The demo quotes the median out loud. */
+  latencies: number[];
 };
 
 const EMPTY: CallState = {
@@ -61,6 +63,7 @@ const EMPTY: CallState = {
   guardrails: [],
   submissions: [],
   metrics: null,
+  latencies: [],
 };
 
 export function useCallStream(callId: string | null, journey: Journey | null): CallState {
@@ -93,6 +96,16 @@ export function useCallStream(callId: string | null, journey: Journey | null): C
   }, [callId]);
 
   return state;
+}
+
+/** Median rather than mean: one slow turn should not define the number. */
+export function medianLatency(values: number[]): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2
+    ? (sorted[mid] as number)
+    : Math.round(((sorted[mid - 1] as number) + (sorted[mid] as number)) / 2);
 }
 
 export function blankForm(journey: Journey | null): FormState {
@@ -166,6 +179,9 @@ function reduce(prev: CallState, event: CallEvent): CallState {
 
     case "submit.result":
       return { ...prev, submissions: [...prev.submissions, { step: event.step, status: event.status, body: event.body }] };
+
+    case "latency.turn":
+      return { ...prev, latencies: [...prev.latencies, event.ms] };
 
     case "metrics.update":
       return {

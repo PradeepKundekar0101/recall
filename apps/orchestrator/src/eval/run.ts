@@ -32,7 +32,7 @@ const RULE_ONLY = new Set(["decliner", "busy", "robot-checker"]);
 
 async function main(): Promise<void> {
   const only = process.argv.find((a) => a.startsWith("--persona="))?.split("=")[1];
-  const selected = only ? [personaById(only)].filter(Boolean) : personas;
+  const selected = only ? [personaById(only)].filter(Boolean) : personas.filter((p) => p.id !== "echo");
   if (!selected.length) {
     console.error(`unknown persona "${only}". Known: ${personas.map((p) => p.id).join(", ")}`);
     process.exit(1);
