@@ -124,6 +124,18 @@ export class SimTransport implements Transport {
     this.endedCb = cb;
   }
 
+  /** Collapses the stream to one line; the sim has no wire and no barge-in race. */
+  async speakStream(sentences: AsyncIterable<string>, signal?: AbortSignal): Promise<string> {
+    let spoken = "";
+    for await (const sentence of sentences) {
+      if (signal?.aborted || this.dead) break;
+      spoken += `${sentence} `;
+    }
+    const text = spoken.trim();
+    if (text) await this.speak(text);
+    return text;
+  }
+
   async transfer(toNumber: string, whisper: string): Promise<void> {
     this.transferredTo = toNumber;
     this.transferWhisper = whisper;

@@ -44,15 +44,29 @@ export type CallStatus =
   | "handoff"
   | "ended";
 
+/**
+ * How a call ended.
+ *
+ * `incomplete` and `disconnected` are separate on purpose: the first is a call
+ * that ran out of conversation, the second is a line that died. They need
+ * different follow-up, and collapsing them would hide the failure that actually
+ * matters on a venue network.
+ */
 export type CallOutcome =
-  | "completed"
-  | "declined"
-  | "callback"
-  | "handoff"
+  /** Required fields confirmed and the sandbox accepted the payload. */
+  | "submitted"
+  /** Talked, did not finish. Includes a callback window being agreed. */
+  | "incomplete"
+  /** The line dropped mid-call. */
+  | "disconnected"
+  /** Never answered, or answered by a machine. */
   | "no_answer"
-  | "voicemail"
-  | "failed"
-  | "dnc_blocked";
+  /** Answered, then went silent through both nudges. */
+  | "abandoned"
+  /** Said no. Opted out, never called again. */
+  | "declined"
+  /** Transferred to a human. */
+  | "handoff";
 
 /** The six signals from the brief. */
 export type EscalationSignal =

@@ -82,6 +82,7 @@ export class TwilioTransport implements Transport {
   private markResolvers = new Map<string, () => void>();
   private speaking = false;
   private dead = false;
+  private framesSent = 0;
 
   /**
    * Echo defence. On a speakerphone our own playback leaks back into the customer's
@@ -328,6 +329,89 @@ export class TwilioTransport implements Transport {
         resolve();
       }, Math.max(4000, (totalBytes / 8000) * 1000 + 2500));
 
+      this.markResolvers.set(markName, () => {
+        clearTimeout(ceiling);
+        resolve();
+      });
+    });
+
+    this.speaking = false;
+    this.playbackEndedAt = Date.now();
+  }
+
+  /**
+   * Streams a reply that is still being generated.
+   *
+   * Each sentence is synthesised and framed the moment it lands, so the customer
+   * hears the first clause while the model is still writing the second. Barge-in
+   * aborts the signal and the loop stops feeding sentences at someone who has
+   * already started talking.
+   */
+  async speakStream(sentences: AsyncIterable<string>, signal?: AbortSignal): Promise<string> {
+    if (this.dead) return "";
+    if (!this.streamSid) await this.streamReady.catch(() => undefined);
+    if (this.dead || !this.ws || !this.streamSid) return "";
+
+    let spoken = "";
+    let started = false;
+
+    for await (const sentence of sentences) {
+      if (signal?.aborted || this.dead || !this.ws || !this.streamSid) break;
+      if (started && !this.speaking) break; // they talked over us
+
+      const audio = await synthesize({ text: sentence, signal }).catch((err) => {
+        log.call(this.id, `TTS failed: ${err instanceof Error ? err.message : err}`);
+        return Buffer.alloc(0);
+      });
+      if (!audio.length || signal?.aborted) continue;
+
+      if (!started) {
+        this.speaking = true;
+        started = true;
+        this.bargeArmed = false;
+      }
+      spoken += `${sentence} `;
+      this.lastSpokenTokens = tokenize(spoken);
+      this.sendFrames(audio);
+    }
+
+    if (started) {
+      await this.awaitPlayback();
+    }
+    return spoken.trim();
+  }
+
+  /** Splits one buffer into 20 ms frames and puts them on the wire. */
+  private sendFrames(audio: Buffer): number {
+    if (!this.ws || !this.streamSid) return 0;
+    let frames = 0;
+    for (let off = 0; off < audio.length; off += FRAME_BYTES) {
+      const frame = audio.subarray(off, Math.min(off + FRAME_BYTES, audio.length));
+      this.ws.send(
+        JSON.stringify({
+          event: "media",
+          streamSid: this.streamSid,
+          media: { payload: frame.toString("base64") },
+        })
+      );
+      frames++;
+    }
+    this.framesSent += frames;
+    return frames;
+  }
+
+  /** Waits for Twilio's mark, for barge-in to clear us, or for a hard ceiling. */
+  private async awaitPlayback(): Promise<void> {
+    if (!this.ws || !this.streamSid) return;
+    const markName = `m${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    this.ws.send(JSON.stringify({ event: "mark", streamSid: this.streamSid, mark: { name: markName } }));
+
+    await new Promise<void>((resolve) => {
+      // A dropped mark must never wedge the call.
+      const ceiling = setTimeout(() => {
+        this.markResolvers.delete(markName);
+        resolve();
+      }, 20_000);
       this.markResolvers.set(markName, () => {
         clearTimeout(ceiling);
         resolve();

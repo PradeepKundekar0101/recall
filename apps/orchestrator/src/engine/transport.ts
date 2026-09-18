@@ -21,6 +21,17 @@ export interface Transport {
   /** Say something. Resolves when playback finishes or is cut short by barge-in. */
   speak(text: string): Promise<void>;
 
+  /**
+   * Say a reply that is still being generated.
+   *
+   * Sentences arrive from the LLM as they complete and go on the wire immediately,
+   * so time-to-first-audio is one short synthesis rather than the whole turn. The
+   * transport owns the wire and the framing; the engine owns the model. Returns
+   * what was actually spoken, which is less than what was yielded when barge-in
+   * cuts the reply short.
+   */
+  speakStream(sentences: AsyncIterable<string>, signal?: AbortSignal): Promise<string>;
+
   /** A completed utterance from the customer, with mean STT word confidence. */
   onUtterance(cb: (text: string, confidence: number | null) => void): void;
 

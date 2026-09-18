@@ -39,10 +39,44 @@ const ANGER_HARD = -0.6;
 const ANGER_SOFT = -0.3;
 const LOW_CONF_FLOOR = 0.6;
 
+/**
+ * "stop calling" is deliberately absent. It reads as anger, but it is a withdrawal
+ * of consent, and routing it to a human would transfer someone who just asked not
+ * to be contacted. RESPECT_NO owns that phrase; see DECLINE_PATTERNS.
+ */
 const ANGER_PATTERNS =
-  /\b(already told|third time|three of you|stop calling|ridiculous|waste of (my )?time|fed up|for the last time|unbelievable)\b/i;
+  /\b(already told|third time|three of you|ridiculous|waste of (my )?time|fed up|for the last time|unbelievable)\b/i;
 
 const ASKS_PATTERNS = /\b(real person|a person|human|someone real|manager|supervisor|speak to someone)\b/i;
+
+/**
+ * Rule-based intent, checked before the model and before the detector.
+ *
+ * Three reasons this is not left to the extractor: a decline must beat every
+ * escalation signal, the demo's scripted beats should not depend on a model round
+ * trip, and these paths have to work when the LLM is unreachable.
+ */
+const DECLINE_PATTERNS =
+  /\b(not interested|no thanks|no thank you|stop calling|don'?t call|take me off|remove me|unsubscribe|leave me alone)\b/i;
+
+const BUSY_PATTERNS =
+  /\b(call (me )?back|another time|not a good time|i'?m busy|in the middle of|can you ring|later today|tomorrow)\b/i;
+
+const ROBOT_PATTERNS = /\b(a bot|a robot|a machine|are you (a )?(real|human)|am i talking to)\b/i;
+
+/**
+ * Intent the engine can decide without the model. Returns null when only the
+ * extractor can tell, which is the common case for an ordinary answer.
+ */
+export function ruleIntent(text: string): "decline" | "busy" | "ask_human" | "robot_check" | null {
+  // Order matters. A decline outranks everything, including a request for a human:
+  // "no, don't put me through to anyone, just stop calling" is a decline.
+  if (DECLINE_PATTERNS.test(text)) return "decline";
+  if (ROBOT_PATTERNS.test(text)) return "robot_check";
+  if (ASKS_PATTERNS.test(text)) return "ask_human";
+  if (BUSY_PATTERNS.test(text)) return "busy";
+  return null;
+}
 
 const SENSITIVE_PATTERNS =
   /\b(card|visa|mastercard|amex|cvv|security code|payment details|dispute|complaint|hardship|vulnerab\w*|deceased|passed away|terminal|cancer|disab\w*)\b/i;
@@ -217,4 +251,51 @@ export function decide(readings: SignalReading[]): SignalReading | null {
     if (hit) return hit;
   }
   return null;
+}
+
+/**
+ * The detector as the engine sees it.
+ *
+ * It runs on every customer turn in parallel with the reply, and it owns its own
+ * streak state so nothing above it has to thread a mutable bag around. The
+ * important property is that `onFire` can be called from anywhere - including from
+ * the STT socket's entity callback, mid-utterance, while the agent is still
+ * speaking - because a customer reading a card number has to be interrupted during
+ * the number, not after it.
+ */
+export class EscalationDetector {
+  private state = newDetectorState();
+  private fired = false;
+
+  constructor(private onFire: (reading: SignalReading) => void) {}
+
+  get hasFired(): boolean {
+    return this.fired;
+  }
+
+  /** Every reading, whether or not it fired, so the console can draw the build-up. */
+  async evaluate(input: Omit<DetectInput, "state">): Promise<SignalReading[]> {
+    const readings = await detect({ ...input, state: this.state });
+    const winner = decide(readings);
+    if (winner) this.fire(winner);
+    return readings;
+  }
+
+  /**
+   * Out-of-band trip, for signals that arrive from somewhere other than a
+   * completed turn. Scribe's entity detection flags a credit_card span while the
+   * customer is still reading it out; waiting for the turn to commit would mean
+   * interrupting after the last digit.
+   */
+  trip(signal: EscalationSignal, evidence: string, score = 1): void {
+    this.fire({ signal, score, evidence, fired: true });
+  }
+
+  private fire(reading: SignalReading): void {
+    // A handoff happens once. A second signal firing during the bridging line
+    // must not queue a second transfer.
+    if (this.fired) return;
+    this.fired = true;
+    this.onFire(reading);
+  }
 }
