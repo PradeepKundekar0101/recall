@@ -193,8 +193,18 @@ export async function extract(opts: {
      */
     let result = normalise(field, patch.value);
     if (field.capture === "spell") {
-      const fromSpeech = normalise(field, patch.evidence || utterance);
-      if (fromSpeech.ok) result = fromSpeech;
+      // The whole turn, not the evidence span. When a customer is spelling
+      // something out the entire utterance is the value, and a span that clips
+      // one character off the front turns "p-r-i-y-a" into "p-riya". The span is
+      // still tried as a fallback for turns that carry more than the value.
+      for (const candidate of [utterance, patch.evidence]) {
+        if (!candidate) continue;
+        const fromSpeech = normalise(field, candidate);
+        if (fromSpeech.ok) {
+          result = fromSpeech;
+          break;
+        }
+      }
     }
 
     if (!result.ok) {

@@ -49,20 +49,28 @@ Every vendor sits behind an env switch, so swapping one is a config change rathe
 | `CALL_MODE` | `echo`, `journey` | `echo` repeats back what STT heard. It is the infrastructure check. |
 | `TRANSPORT` | `sim`, `pstn` | `sim` runs the exact engine against scripted personas without dialling. |
 
-**OpenRouter works, and is too slow to demo on.**
-Measured with `pnpm llm:check`, warm, through the gateway:
+**Provider latency, measured with `pnpm llm:check`** (warm medians, 4 samples):
 
-| Model | Extraction | First sentence |
+| Provider / model | Extraction | First sentence |
 | --- | --- | --- |
-| `google/gemini-2.5-flash-lite` | 1110 ms | 1067 ms |
-| `openai/gpt-4o-mini` | 1686 ms | 3034 ms |
-| `anthropic/claude-haiku-4.5` | 2067 ms | 1426 ms |
+| **openai / gpt-4o-mini (direct)** | **1475 ms** | **832 ms** |
+| openrouter / google gemini-2.5-flash-lite | 1110 ms | 1067 ms |
+| openrouter / openai gpt-4o-mini | 1686 ms | 3034 ms |
+| openrouter / anthropic claude-haiku-4.5 | 2067 ms | 1426 ms |
 
-Cold and warm are near-identical, so this is not connection setup.
-Three architecturally different models clustering above a hard floor of ~1050 ms is the signature of fixed gateway overhead, and the whole turn budget is 800 ms.
-Get a direct Anthropic or OpenAI key for the demo; keep OpenRouter for trying models out.
+Direct OpenAI is the demo path.
+The gateway's penalty lands mostly on streaming - 3034 ms against 832 ms for the same model - and cold and warm are near-identical through it, so it is fixed overhead rather than connection setup.
 
-**Mitigations already in place**, which matter whichever provider you use: every scripted line is pre-rendered and spoken verbatim, so the model is off the speech path entirely and a turn costs one extraction call rather than two round trips; a short pre-rendered filler plays at 400 ms so the line is never silent; and closed yes/no answers skip the sentiment classifier, removing a model call from the commonest turn in the journey.
+Extraction is still well over the 250 ms the budget allows, which is why the mitigations below matter more than the provider choice does.
+
+**Mitigations already in place**, which matter more than the provider choice:
+
+- Every scripted line is pre-rendered to ulaw on disk and spoken verbatim, so the model is off the speech path entirely.
+- **Closed fields never reach the model.** A yes/no or an enum answer is matched in code, so those turns complete in single-digit milliseconds. Roughly a third of the journey's questions are closed.
+- A short pre-rendered filler plays at 400 ms, but only on turns that actually need the model - in front of an instant turn it is chatter, not cover.
+- Closed answers also skip the sentiment classifier.
+
+Measured effect on a full simulated journey: 32 s down to 20 s, and 13 of 15 fields captured hands-free.
 
 **The older caveats still apply.**
 It is OpenAI-compatible, so it uses the same client with a different base URL; set `OPENROUTER_API_KEY` and `LLM_PROVIDER=openrouter`, and use org-prefixed model ids like `anthropic/claude-haiku-4.5`.

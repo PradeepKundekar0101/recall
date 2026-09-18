@@ -7,7 +7,7 @@ import { JourneyState } from "./journey-state.js";
 import type { Form } from "./fact-bus.js";
 import { EscalationDetector, angerPatternMatched, looksLikeDontKnow, redactDigits, ruleIntent, type SignalReading } from "./escalation.js";
 import { extract } from "./extract.js";
-import { normaliseBool, speakableValue } from "./normalise.js";
+import { normalise, normaliseBool, speakableValue } from "./normalise.js";
 import { submitFinal, submitSection } from "../sandbox/submit.js";
 import type { Transport, TransportEndReason } from "./transport.js";
 
@@ -152,16 +152,45 @@ export class DialogueEngine {
       // gateway, extraction can take over a second, which on a phone reads as the
       // agent having hung up. A short pre-rendered acknowledgement covers it and
       // costs nothing, because it is already ulaw on disk.
-      this.armFiller();
+
+
+      /**
+       * Whether this turn needs the model at all.
+       *
+       * A closed field answered with a recognisable yes/no or enum value is
+       * resolved in code further down, so calling the extractor first buys
+       * nothing and costs the slowest part of the turn - measured at ~1.4s
+       * against a 250ms budget. Roughly a third of the journey's questions are
+       * closed, so on those turns this is the difference between a conversation
+       * and a walkie-talkie.
+       *
+       * Natural and spelled fields still go to the model: those are the turns
+       * where a customer volunteers three fields in one breath, and the whole
+       * efficiency argument lives there.
+       */
+      const resolvableInCode =
+        asking?.capture === "closed" &&
+        (asking.type === "bool"
+          ? normaliseBool(text) !== null
+          : asking.type === "enum"
+            ? normalise(asking, text).ok
+            : false);
+
+      // Only when something slow is about to happen. A closed field resolved in
+      // code answers in single-digit milliseconds, and a filler in front of that
+      // is not covering a pause, it is adding chatter.
+      if (!resolvableInCode) this.armFiller();
 
       const [extraction, readings] = await Promise.all([
-        extract({
-          journey: this.state.journey,
-          form: this.state.form,
-          utterance: text,
-          asking,
-          sttConfidence: confidence,
-        }),
+        resolvableInCode
+          ? Promise.resolve({ accepted: [], rejected: [], intent: "answer" as const, ms: 0 })
+          : extract({
+              journey: this.state.journey,
+              form: this.state.form,
+              utterance: text,
+              asking,
+              sttConfidence: confidence,
+            }),
         this.detector.evaluate({
           // Raw, not redacted: this is the only consumer that needs the digits.
           utterance: raw,
@@ -219,12 +248,22 @@ export class DialogueEngine {
     // reading of a two-letter utterance stripped of its question - so it is
     // resolved directly, which is both safer and one round trip cheaper.
     const askingField = this.state.asking ? this.state.fieldById(this.state.asking) : undefined;
-    if (askingField?.capture === "closed" && askingField.type === "bool") {
-      const said = normaliseBool(text);
-      if (said !== null) {
+    if (askingField?.capture === "closed" && (askingField.type === "bool" || askingField.type === "enum")) {
+      const result =
+        askingField.type === "bool"
+          ? (() => {
+              const said = normaliseBool(text);
+              return said === null ? null : said;
+            })()
+          : (() => {
+              const r = normalise(askingField, text);
+              return r.ok ? r.value : null;
+            })();
+
+      if (result !== null) {
         this.state.form.set(askingField.id, {
           state: askingField.confirm === "none" ? "confirmed" : "captured",
-          value: said,
+          value: result,
           confidence: 1,
           evidence: text.slice(0, 80),
         });
