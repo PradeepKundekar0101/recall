@@ -1,0 +1,203 @@
+{
+  "id": "energy",
+  "vertical": "energy",
+  "version": "0.1.0-placeholder",
+
+  "sections": [
+    { "id": "identity",   "title": "Identity",    "intro": "First, I'll just confirm a couple of details about you." },
+    { "id": "contact",    "title": "Contact",     "intro": "Now the best way to reach you." },
+    { "id": "supply",     "title": "Supply",      "intro": "Next, the address where the energy is supplied." },
+    { "id": "connection", "title": "Connection",  "intro": "A quick one about the connection itself." },
+    { "id": "eligibility","title": "Eligibility", "intro": "Two questions that can affect your rate." },
+    { "id": "plan",       "title": "Plan",        "intro": "Last step, the plan you were looking at." }
+  ],
+
+  "fields": [
+    {
+      "id": "full_name", "section": "identity", "type": "text", "label": "Full name",
+      "required": true, "capture": "natural", "confirm": "read_back",
+      "script": {
+        "ask": "Can I start with your full name?",
+        "reask": "Sorry, I didn't catch that. What was your full name?",
+        "confirm": "I have {value}. Is that right?"
+      },
+      "max_attempts": 2, "sensitive": false
+    },
+    {
+      "id": "dob", "section": "identity", "type": "date", "label": "Date of birth",
+      "required": true, "capture": "natural", "confirm": "read_back",
+      "script": {
+        "ask": "What's your date of birth?",
+        "reask": "Sorry, could you give me your date of birth again?",
+        "confirm": "So that's the {value}?"
+      },
+      "validate": "date_past", "max_attempts": 2, "sensitive": false
+    },
+    {
+      "id": "account_holder", "section": "identity", "type": "bool", "label": "Account holder",
+      "required": true, "capture": "closed", "confirm": "none",
+      "script": {
+        "ask": "And are you the account holder for the energy bill?",
+        "reask": "Sorry, are you the account holder - yes or no?"
+      },
+      "max_attempts": 2, "sensitive": false
+    },
+
+    {
+      "id": "phone", "section": "contact", "type": "phone", "label": "Phone",
+      "required": true, "capture": "closed", "confirm": "read_back",
+      "script": {
+        "ask": "Is this number the best one to reach you on?",
+        "reask": "Sorry, is this the best number for you?",
+        "confirm": "I have {value_spelled}. Is that right?"
+      },
+      "validate": "phone_au", "max_attempts": 2, "sensitive": false
+    },
+    {
+      "id": "email", "section": "contact", "type": "email", "label": "Email",
+      "required": true, "capture": "spell", "confirm": "letters",
+      "script": {
+        "ask": "What's the best email address for you? You can spell out the part before the at-sign.",
+        "reask": "Sorry, I didn't catch that. Could you spell it letter by letter?",
+        "confirm": "I have {value_spelled}. Is that right?"
+      },
+      "validate": "email", "max_attempts": 2, "sensitive": false
+    },
+
+    {
+      "id": "street", "section": "supply", "type": "text", "label": "Street address",
+      "required": true, "capture": "natural", "confirm": "read_back",
+      "script": {
+        "ask": "What's the street address where the energy is supplied?",
+        "reask": "Sorry, could you give me that street address again?",
+        "confirm": "I have {value}. Is that right?"
+      },
+      "max_attempts": 2, "sensitive": false
+    },
+    {
+      "id": "suburb", "section": "supply", "type": "text", "label": "Suburb",
+      "required": true, "capture": "natural", "confirm": "read_back",
+      "script": {
+        "ask": "And the suburb?",
+        "reask": "Sorry, which suburb was that?",
+        "confirm": "{value}, is that right?"
+      },
+      "max_attempts": 2, "sensitive": false
+    },
+    {
+      "id": "state", "section": "supply", "type": "enum", "label": "State",
+      "required": true, "capture": "natural", "confirm": "none",
+      "options": ["NSW", "VIC", "QLD", "SA", "WA", "TAS", "ACT", "NT"],
+      "script": {
+        "ask": "And which state is that in?",
+        "reask": "Sorry, which state?"
+      },
+      "max_attempts": 2, "sensitive": false
+    },
+    {
+      "id": "postcode", "section": "supply", "type": "digits", "label": "Postcode",
+      "required": true, "capture": "spell", "confirm": "read_back",
+      "script": {
+        "ask": "And the postcode?",
+        "reask": "Sorry, could you give me those four digits again?",
+        "confirm": "{value_spelled}. Correct?"
+      },
+      "validate": "postcode_au", "max_attempts": 2, "sensitive": false
+    },
+    {
+      "id": "fuel_type", "section": "supply", "type": "enum", "label": "Fuel type",
+      "required": true, "capture": "closed", "confirm": "none",
+      "options": ["electricity", "gas", "both"],
+      "script": {
+        "ask": "Is this for electricity, gas, or both?",
+        "reask": "Sorry - electricity, gas, or both?"
+      },
+      "max_attempts": 2, "sensitive": false
+    },
+    {
+      "id": "nmi", "section": "supply", "type": "alphanumeric", "label": "NMI",
+      "required": false, "capture": "spell", "confirm": "read_back",
+      "script": {
+        "ask": "Do you have your NMI handy? It's the ten-digit number on your bill - but it's fine if you don't, we can look it up.",
+        "reask": "No problem. If you have it, could you read it out slowly? Otherwise we'll look it up.",
+        "confirm": "I have {value_spelled}. Is that right?"
+      },
+      "validate": "nmi", "max_attempts": 2, "sensitive": false
+    },
+
+    {
+      "id": "connection_type", "section": "connection", "type": "enum", "label": "Connection type",
+      "required": true, "capture": "closed", "confirm": "none",
+      "options": ["existing", "move_in"],
+      "script": {
+        "ask": "Is this for a property you're already living in, or are you moving in?",
+        "reask": "Sorry - existing connection, or a move-in?"
+      },
+      "max_attempts": 2, "sensitive": false
+    },
+    {
+      "id": "move_in_date", "section": "connection", "type": "date", "label": "Move-in date",
+      "required": true, "capture": "natural", "confirm": "read_back",
+      "ask_when": { "field": "connection_type", "equals": "move_in" },
+      "script": {
+        "ask": "What date are you moving in?",
+        "reask": "Sorry, which date was that?",
+        "confirm": "So that's the {value}?"
+      },
+      "validate": "date", "max_attempts": 2, "sensitive": false
+    },
+
+    {
+      "id": "concession", "section": "eligibility", "type": "bool", "label": "Concession",
+      "required": true, "capture": "closed", "confirm": "none",
+      "script": {
+        "ask": "Do you hold any concession or pensioner card?",
+        "reask": "Sorry, do you hold a concession card - yes or no?"
+      },
+      "max_attempts": 2, "sensitive": false
+    },
+    {
+      "id": "concession_type", "section": "eligibility", "type": "enum", "label": "Concession type",
+      "required": true, "capture": "closed", "confirm": "none",
+      "options": ["pension", "healthcare", "veteran", "other"],
+      "ask_when": { "field": "concession", "equals": true },
+      "script": {
+        "ask": "Which type is it - pension, healthcare, veteran, or something else?",
+        "reask": "Sorry, which card type is that?"
+      },
+      "max_attempts": 2, "sensitive": false
+    },
+    {
+      "id": "life_support", "section": "eligibility", "type": "bool", "label": "Life support",
+      "required": true, "capture": "closed", "confirm": "none",
+      "script": {
+        "ask": "Is there any life-support equipment at the property? It's a standard question we have to ask.",
+        "reask": "Sorry - any life-support equipment at the property?"
+      },
+      "max_attempts": 2, "sensitive": false
+    },
+
+    {
+      "id": "plan_id", "section": "plan", "type": "text", "label": "Plan",
+      "required": true, "capture": "closed", "confirm": "read_back",
+      "script": {
+        "ask": "Last thing - you were looking at {plan_name}. Shall I put you down for that one?",
+        "reask": "Sorry, did you want to go ahead with {plan_name}?",
+        "confirm": "{value}. Confirmed?"
+      },
+      "max_attempts": 2, "sensitive": false
+    }
+  ],
+
+  "scripts": {
+    "opener": "Hi, is this {first_name}? This is the econnex assistant calling about the energy comparison you started with us {when}. I'm an automated assistant, and this call is recorded for quality and compliance. Is now a good time to pick up where you left off - it'll take about three minutes?",
+    "consent_yes": "Great, thanks. Let's pick up where you left off.",
+    "review": "Great, I've got everything. Just to confirm: {summary}. Shall I go ahead and submit that?",
+    "close": "Done - that's submitted. You'll get a confirmation at {email}. Thanks {first_name}, have a good one.",
+    "decline": "No problem at all - I'll make a note and we won't call again. Thanks for your time.",
+    "busy": "Of course. Would tomorrow morning or afternoon suit better?",
+    "handoff_bridge": "I'm going to get a colleague to help you with this - one moment, they'll have everything you've told me so far.",
+    "no_advice": "That's one a person can answer properly - let me get someone for you.",
+    "robot_disclosure": "Yes, I'm an automated assistant. I can get a person on the line if you'd prefer."
+  }
+}
