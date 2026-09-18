@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
-    "build": "tsc -p tsconfig.json && node -e \"require('fs').cpSync('src/journey','dist/journey',{recursive:true,filter:(s)=>!s.endsWith('.ts')})\"",
+    "build": "tsc -p tsconfig.json && node copy-assets.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "eval": "tsx src/eval/run.ts",
     "journey:check": "tsx src/journey/check.ts",
