@@ -22,10 +22,12 @@ api.get("/health", (_req, res) => {
   res.json({
     ok: true,
     transport: env.transport,
+    call_mode: env.callMode,
     mock_voice: env.mockVoice,
+    providers: { stt: env.sttProvider, llm: env.llmProvider },
     integrations: {
-      deepgram: has.deepgram(),
-      elevenlabs: has.elevenLabs(),
+      stt: has.stt(),
+      tts: has.tts(),
       llm: has.llm(),
       twilio: has.twilio(),
       supabase: has.supabase(),

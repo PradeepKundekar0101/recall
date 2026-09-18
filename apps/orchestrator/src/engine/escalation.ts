@@ -1,6 +1,5 @@
-import type Anthropic from "@anthropic-ai/sdk";
 import type { EscalationSignal, Intent } from "@recall/shared";
-import { toolCall } from "../voice/llm.js";
+import { toolCall, type ToolSchema } from "../voice/llm.js";
 import { env } from "../env.js";
 
 /**
@@ -87,10 +86,10 @@ export function redactDigits(text: string): string {
   return text.replace(/(?:\d[\s-]*){8,}/g, "[REDACTED]");
 }
 
-const angerTool: Anthropic.Tool = {
+const angerTool: ToolSchema = {
   name: "rate_turn",
   description: "Rate the customer's emotional state on this one turn of a phone call.",
-  input_schema: {
+  parameters: {
     type: "object",
     additionalProperties: false,
     required: ["sentiment", "evidence"],

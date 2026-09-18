@@ -1,6 +1,5 @@
-import type Anthropic from "@anthropic-ai/sdk";
 import type { FieldValue, Intent, Journey, JourneyField } from "@recall/shared";
-import { toolCall } from "../voice/llm.js";
+import { toolCall, type ToolSchema } from "../voice/llm.js";
 import { normalise, stateFromPostcode } from "./normalise.js";
 import type { Form } from "./fact-bus.js";
 
@@ -56,14 +55,14 @@ export type RejectedPatch = {
  * Built from the journey so a field added to the config is extractable without a
  * prompt edit - the same reason the console and the payload are generated from it.
  */
-export function extractionTool(journey: Journey): Anthropic.Tool {
+export function extractionTool(journey: Journey): ToolSchema {
   return {
     name: "record_answer",
     description:
       "Record what the customer said as a patch to the energy comparison form. " +
       "Only include a field when the customer actually gave a value for it. " +
       "Never invent a value, and never guess at one you did not clearly hear.",
-    input_schema: {
+    parameters: {
       type: "object",
       additionalProperties: false,
       required: ["patches", "intent", "unasked_fields_mentioned"],
