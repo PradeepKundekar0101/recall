@@ -48,7 +48,7 @@ function list(name: string): string[] {
 }
 
 export type SttProvider = "scribe" | "deepgram";
-export type LlmProvider = "anthropic" | "openai" | "gemini";
+export type LlmProvider = "anthropic" | "openai" | "openrouter" | "gemini";
 export type CallMode = "echo" | "journey";
 
 /**
@@ -61,9 +61,14 @@ export type CallMode = "echo" | "journey";
  */
 function pickLlm(): LlmProvider {
   const explicit = opt("LLM_PROVIDER").toLowerCase();
-  if (explicit === "anthropic" || explicit === "openai" || explicit === "gemini") return explicit;
+  if (explicit === "anthropic" || explicit === "openai" || explicit === "openrouter" || explicit === "gemini") {
+    return explicit;
+  }
+  // A direct key is preferred over the gateway: OpenRouter adds a network hop in
+  // front of the model, and the turn budget only allows 250 ms to first token.
   if (process.env.ANTHROPIC_API_KEY) return "anthropic";
   if (process.env.OPENAI_API_KEY) return "openai";
+  if (process.env.OPENROUTER_API_KEY) return "openrouter";
   if (process.env.GEMINI_API_KEY) return "gemini";
   return "anthropic";
 }
@@ -71,6 +76,9 @@ function pickLlm(): LlmProvider {
 const DEFAULT_MODEL: Record<LlmProvider, string> = {
   anthropic: "claude-haiku-4-5",
   openai: "gpt-4o-mini",
+  // OpenRouter ids are org-prefixed. Haiku through the gateway is the same model
+  // the direct provider serves, so the dialogue behaves identically either way.
+  openrouter: "anthropic/claude-haiku-4.5",
   gemini: "gemini-3.8-flash",
 };
 
@@ -102,6 +110,7 @@ export const env = {
   llmProvider,
   anthropicKey: opt("ANTHROPIC_API_KEY"),
   openaiKey: opt("OPENAI_API_KEY"),
+  openrouterKey: opt("OPENROUTER_API_KEY"),
   geminiKey: opt("GEMINI_API_KEY"),
   dialogueModel: opt("DIALOGUE_MODEL") || DEFAULT_MODEL[llmProvider],
   escalationModel: opt("ESCALATION_MODEL") || DEFAULT_MODEL[llmProvider],
@@ -139,23 +148,23 @@ export const has = {
   twilio: () => Boolean(env.twilioSid && env.twilioToken && env.twilioFrom && env.publicBaseUrl),
   stt: () => (env.sttProvider === "scribe" ? Boolean(env.elevenLabsKey) : Boolean(env.deepgramKey)),
   tts: () => Boolean(env.elevenLabsKey && env.elevenLabsVoiceId),
-  llm: () =>
-    env.llmProvider === "anthropic"
-      ? Boolean(env.anthropicKey)
-      : env.llmProvider === "openai"
-        ? Boolean(env.openaiKey)
-        : Boolean(env.geminiKey),
+  llm: () => Boolean(llmKey()),
   supabase: () => Boolean(env.supabaseUrl && env.supabaseKey),
   handoff: () => Boolean(env.handoffNumber),
 };
 
 /** The key the active LLM provider needs. */
 export function llmKey(): string {
-  return env.llmProvider === "anthropic"
-    ? env.anthropicKey
-    : env.llmProvider === "openai"
-      ? env.openaiKey
-      : env.geminiKey;
+  switch (env.llmProvider) {
+    case "anthropic":
+      return env.anthropicKey;
+    case "openai":
+      return env.openaiKey;
+    case "openrouter":
+      return env.openrouterKey;
+    case "gemini":
+      return env.geminiKey;
+  }
 }
 
 /** Printed at boot so a missing key is obvious before, not during, the demo. */

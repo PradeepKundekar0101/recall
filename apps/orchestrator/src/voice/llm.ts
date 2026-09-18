@@ -1,7 +1,7 @@
 import { env, has, llmKey } from "../env.js";
 import { log } from "../log.js";
 import { anthropicProvider } from "./llm/anthropic.js";
-import { openaiProvider } from "./llm/openai.js";
+import { openaiProvider, openrouterProvider } from "./llm/openai.js";
 import { geminiProvider } from "./llm/gemini.js";
 import type { ChatMessage, LlmProviderApi, ToolSchema } from "./llm/types.js";
 
@@ -15,6 +15,7 @@ export { SentenceSplitter } from "./llm/types.js";
 const PROVIDERS: Record<string, LlmProviderApi> = {
   anthropic: anthropicProvider,
   openai: openaiProvider,
+  openrouter: openrouterProvider,
   gemini: geminiProvider,
 };
 

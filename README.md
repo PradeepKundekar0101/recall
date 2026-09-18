@@ -45,9 +45,14 @@ Every vendor sits behind an env switch, so swapping one is a config change rathe
 | Switch | Options | Notes |
 | --- | --- | --- |
 | `STT_PROVIDER` | `scribe` (default), `deepgram` | Scribe is the build target. Both take Twilio's audio natively, so there is no transcode either way. |
-| `LLM_PROVIDER` | `anthropic`, `openai`, `gemini` | Blank means whichever key is set wins. Reasoning is off on all three. |
+| `LLM_PROVIDER` | `anthropic`, `openai`, `openrouter`, `gemini` | Blank means whichever key is set wins, preferring a direct key over the gateway. Reasoning is off on all of them. |
 | `CALL_MODE` | `echo`, `journey` | `echo` repeats back what STT heard. It is the infrastructure check. |
 | `TRANSPORT` | `sim`, `pstn` | `sim` runs the exact engine against scripted personas without dialling. |
+
+**OpenRouter works, with two caveats.**
+It is OpenAI-compatible, so it uses the same client with a different base URL; set `OPENROUTER_API_KEY` and `LLM_PROVIDER=openrouter`, and use org-prefixed model ids like `anthropic/claude-haiku-4.5`.
+The caveats are that it adds a network hop in front of the model, against a budget that only allows 250 ms to first token, and that `strict` tool calling is model-dependent behind the gateway - so it is sent without `strict` and the extractor's own validation holds the line instead.
+Run `pnpm llm:check` to measure both before committing to it for the demo.
 
 **Gemini is wired but never selected implicitly.**
 Its published time-to-first-token at default thinking levels is an order of magnitude outside this project's 250 ms budget, and it has been stalling upstream.
@@ -77,6 +82,7 @@ The orchestrator prints an integration report at boot, so a missing key is obvio
 | `pnpm dev:web` | Console only |
 | `pnpm sandbox:mock` | Mock CIMET sandbox on :4001 |
 | `pnpm journey:check` | Validate `energy.journey.json` and print its shape |
+| `pnpm llm:check` | Prove the configured LLM can do structured extraction and streaming, and measure both. Needs `MOCK_VOICE=0`. |
 | `pnpm voice:check` | Synthesise a phrase with Flash, feed it back into Scribe, check the transcript. Needs `MOCK_VOICE=0`. |
 | `pnpm voice:calibrate` | Measure the confidence scale clean vs degraded. Re-run on real phone audio. |
 | `pnpm twilio:check` | Geo permissions, from-number, trial status, tunnel websocket upgrade |
