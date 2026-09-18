@@ -1,0 +1,21 @@
+{
+  "name": "recall",
+  "private": true,
+  "version": "0.1.0",
+  "description": "CIMET Voice Recovery Agent - outbound AI voice agent that recovers dropped-off Energy leads.",
+  "packageManager": "pnpm@10.31.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter \"./apps/*\" dev",
+    "dev:api": "pnpm --filter orchestrator dev",
+    "dev:web": "pnpm --filter web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "eval": "pnpm --filter orchestrator eval",
+    "journey:check": "pnpm --filter orchestrator journey:check",
+    "twilio:check": "pnpm --filter orchestrator twilio:check",
+    "sandbox:mock": "pnpm --filter orchestrator sandbox:mock"
+  },
+  "engines": {
+    "node": ">=20 <21"
+  }
+}
