@@ -16,9 +16,23 @@ import type { Form } from "./fact-bus.js";
  * perfectly capable of being certain about a misheard word.
  */
 
-export const CONFIDENCE_FLOOR = 0.85;
+/**
+ * Thresholds on the rescaled confidence, where 1.0 is as good as the model gets
+ * on clean audio. See `voice/stt/scribe.ts` for how the scale is derived.
+ *
+ * These are deliberately permissive, and that is a finding rather than a
+ * concession. Measured with `pnpm voice:calibrate`, clean and lightly degraded
+ * audio overlap: clean scored 0.46-0.63 raw and degraded 0.32-0.53, so confidence
+ * alone cannot reliably separate a good answer from a bad one. A tight gate would
+ * mostly re-ask correct answers, which is a worse call than occasionally reading
+ * back a wrong one.
+ *
+ * Read-back is therefore the real gate. Confidence only catches the turns that
+ * are genuinely broken, and feeds the escalation meter.
+ */
+export const CONFIDENCE_FLOOR = 0.55;
 /** Two turns under this on the same field is the LOW CONF escalation signal. */
-export const LOW_CONFIDENCE = 0.6;
+export const LOW_CONFIDENCE = 0.45;
 
 export type RawPatch = {
   field: string;

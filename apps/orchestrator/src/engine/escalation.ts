@@ -37,7 +37,8 @@ export function newDetectorState(): DetectorState {
 
 const ANGER_HARD = -0.6;
 const ANGER_SOFT = -0.3;
-const LOW_CONF_FLOOR = 0.6;
+// Matches LOW_CONFIDENCE in extract.ts; see the note there on why it is low.
+const LOW_CONF_FLOOR = 0.45;
 
 /**
  * "stop calling" is deliberately absent. It reads as anger, but it is a withdrawal

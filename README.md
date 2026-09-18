@@ -77,6 +77,8 @@ The orchestrator prints an integration report at boot, so a missing key is obvio
 | `pnpm dev:web` | Console only |
 | `pnpm sandbox:mock` | Mock CIMET sandbox on :4001 |
 | `pnpm journey:check` | Validate `energy.journey.json` and print its shape |
+| `pnpm voice:check` | Synthesise a phrase with Flash, feed it back into Scribe, check the transcript. Needs `MOCK_VOICE=0`. |
+| `pnpm voice:calibrate` | Measure the confidence scale clean vs degraded. Re-run on real phone audio. |
 | `pnpm twilio:check` | Geo permissions, from-number, trial status, tunnel websocket upgrade |
 | `pnpm eval` | Run the ten simulator personas (gate: 9/10) |
 | `pnpm typecheck` | All three packages |
@@ -129,11 +131,28 @@ The extractor's own score is multiplied by the STT word confidence over the evid
 
 ## Known gaps
 
-- **Nothing has been exercised against live audio.** The STT and TTS clients are written against the published protocols and typecheck, but no key has been set, so the first real call is also the first test of them.
+- **The confidence scale needs re-measuring on real phone audio.** The current baseline was measured on synthetic speech fed back through the encoder, which is not a mobile handset in a loud room. Run `pnpm voice:calibrate` once real call audio exists.
+- No LLM key is set, so extraction, the review gate and 7 of the 10 personas are still untested. Echo mode does not need one.
 - `TEST_NUMBERS` currently holds an Indian number carried over from the old project. Replace it with the AU test numbers the organisers provide.
 - The Energy field list and scripts in `energy.journey.json` are placeholders, pending the recording.
 - The manual baseline for the efficiency counter is zero until it can be measured, rather than a number invented to make the comparison look good.
 - 7 of the 10 eval personas need a live model; a dry run scores only the 3 rule-decided ones and says so.
+
+## Confidence is a weak signal here, and read-back is the real gate
+
+Scribe reports per-word log probabilities, not a 0-1 confidence.
+Measured with `pnpm voice:calibrate` on this account: clean speech that transcribed perfectly scored **0.46-0.63** raw, and deliberately degraded audio scored **0.32-0.53**.
+Those ranges overlap.
+
+Two consequences, both load-bearing:
+
+1. The thresholds carried over from Deepgram (accept at 0.85, LOW CONF under 0.6) would have rejected **every correct answer** and re-asked every field.
+   Raw probability is now divided by a measured clean baseline, so 1.0 means "as confident as this model gets on clean audio", and the thresholds sit at 0.55 and 0.45 on that scale.
+2. Because clean and degraded overlap, confidence cannot reliably separate a good answer from a bad one.
+   A tight gate would mostly re-ask correct answers, which is a worse call than occasionally reading back a wrong one.
+   **Read-back is the real gate**; confidence only catches genuinely broken turns and feeds the escalation meter.
+
+Badly degraded audio produces *no transcript at all* rather than a low-confidence one, so that case is handled by the silence timers, not by LOW CONF.
 
 ## Node 20, and why Supabase nearly broke it
 

@@ -42,15 +42,26 @@ export function scribeQuery(opts: SttOptions): URLSearchParams {
     language_code: "en",
     // Server-side VAD closes the turn; the engine never has to guess at silence.
     commit_strategy: "vad",
-    vad_silence_threshold_secs: String((opts.silenceMs ?? 300) / 1000),
+    // The server clamps this to 0.5s minimum - asking for 0.3 silently became 0.5,
+    // so it is set to the real floor rather than a number that looks faster.
+    vad_silence_threshold_secs: String(Math.max(0.5, (opts.silenceMs ?? 500) / 1000)),
     min_speech_duration_ms: "120",
     // Required for per-word logprobs, which the LOW CONF signal is defined on.
     include_timestamps: "true",
-    // Flags credit_card spans before our digit-run heuristic sees a whole number.
-    entity_detection: "true",
-    // A phone in a loud room is the actual demo condition.
-    filter_background_audio: "true",
   });
+
+  /**
+   * Entity detection takes entity types or categories, not a boolean. `pci` is the
+   * category covering payment-card data, which is exactly what guardrail 3 is
+   * watching for - and Scribe flags it before our own digit-run heuristic has seen
+   * a complete number.
+   *
+   * Not combined with `filter_background_audio`: the server rejects that pairing
+   * with include_timestamps, and timestamps win because LOW CONF cannot work
+   * without them.
+   */
+  params.append("entity_detection", "pci");
+
   if (opts.keywords?.length) {
     for (const term of opts.keywords.slice(0, 100)) params.append("keyterms", term);
   }
@@ -58,16 +69,44 @@ export function scribeQuery(opts: SttOptions): URLSearchParams {
 }
 
 /**
- * Scribe reports per-word log probabilities. exp() converts one back to a
- * probability; the mean over real words is the utterance confidence. Spacing
- * tokens are excluded because they are always near-certain and would drag the
- * mean up over exactly the mumbled utterances this is meant to catch.
+ * The confidence scale, measured rather than assumed.
+ *
+ * Scribe reports per-word log probabilities, which are not on the same scale as
+ * Deepgram's 0-1 confidence. Measured against this account with `pnpm
+ * voice:calibrate`, clean synthetic speech that transcribed perfectly scored
+ * 0.46-0.63 raw, mean 0.52. Carrying over a 0.85 accept threshold would have
+ * rejected every correct answer on the call and re-asked every field.
+ *
+ * So raw probability is divided by the measured clean baseline: 1.0 means "as
+ * confident as this model gets on clean audio", which is what the thresholds
+ * downstream are written against.
+ *
+ * Re-measure on real phone audio before the demo. Synthetic speech fed back
+ * through the encoder is not a mobile handset in a loud room, and the baseline
+ * will move.
  */
-export function meanConfidence(words: ScribeWord[] | undefined): number | null {
+export const CLEAN_BASELINE = 0.52;
+
+type ScribeWordLike = { text?: string; type?: string; logprob?: number };
+
+/**
+ * exp() converts one log probability back to a probability; the mean over real
+ * words is the utterance confidence. Spacing tokens are excluded because they are
+ * always near-certain and would drag the mean up over exactly the mumbled
+ * utterances this is meant to catch.
+ */
+export function meanConfidence(words: ScribeWordLike[] | undefined): number | null {
   const real = (words ?? []).filter((w) => w.type !== "spacing" && typeof w.logprob === "number");
   if (!real.length) return null;
-  const sum = real.reduce((acc, w) => acc + Math.exp(w.logprob as number), 0);
-  return Math.min(1, sum / real.length);
+  const raw = real.reduce((acc, w) => acc + Math.exp(w.logprob as number), 0) / real.length;
+  return Math.min(1, raw / CLEAN_BASELINE);
+}
+
+/** The unscaled mean, for the calibration tool. */
+export function rawMeanProbability(words: ScribeWordLike[] | undefined): number | null {
+  const real = (words ?? []).filter((w) => w.type !== "spacing" && typeof w.logprob === "number");
+  if (!real.length) return null;
+  return real.reduce((acc, w) => acc + Math.exp(w.logprob as number), 0) / real.length;
 }
 
 export async function openScribe(opts: SttOptions): Promise<SttSession> {
@@ -138,6 +177,9 @@ export async function openScribe(opts: SttOptions): Promise<SttSession> {
         break;
       }
 
+      // Arrives either side of the timestamped transcript - both orders observed
+      // against the live service - so the engine treats it as an out-of-band trip
+      // rather than as part of the turn it belongs to.
       case "committed_transcript_entities": {
         for (const entity of msg.entities ?? []) {
           events.onSensitiveEntity?.(entity.entity_type, entity.text);

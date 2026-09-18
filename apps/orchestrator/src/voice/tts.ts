@@ -148,6 +148,8 @@ export async function openTtsStream(opts: {
   let cancelled = false;
   let finished = false;
   let resolveEnd: (() => void) | null = null;
+  /** Set when the server reports a problem, and rethrown from end(). */
+  let failure: Error | null = null;
 
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("elevenlabs tts did not open within 8s")), 8000);
@@ -170,12 +172,25 @@ export async function openTtsStream(opts: {
 
   socket.on("message", (data) => {
     if (cancelled) return;
-    let msg: { audio?: string; isFinal?: boolean };
+    let msg: { audio?: string; isFinal?: boolean; error?: string; message?: string; code?: number };
     try {
-      msg = JSON.parse(data.toString()) as { audio?: string; isFinal?: boolean };
+      msg = JSON.parse(data.toString()) as typeof msg;
     } catch {
       return;
     }
+
+    // The server reports a bad voice, a bad model or an exhausted quota as an
+    // ordinary message and then closes. Ignoring it produced a silent zero-byte
+    // synthesis, which on a call is indistinguishable from dead air - and which
+    // hid a wrong voice id behind "TTS returned zero bytes".
+    if (msg.error || (msg.message && !msg.audio)) {
+      failure = new Error(`elevenlabs tts: ${msg.error ?? "error"} - ${msg.message ?? "no detail"}`);
+      log.error(failure.message);
+      finished = true;
+      resolveEnd?.();
+      return;
+    }
+
     if (msg.audio) opts.onAudio(Buffer.from(msg.audio, "base64"));
     if (msg.isFinal) {
       finished = true;
@@ -183,7 +198,12 @@ export async function openTtsStream(opts: {
     }
   });
 
-  socket.on("close", () => {
+  socket.on("close", (code, reason) => {
+    // 1000 is a clean close; anything else that arrives before isFinal means the
+    // synthesis did not happen.
+    if (!finished && code !== 1000) {
+      failure ??= new Error(`elevenlabs tts closed ${code}: ${reason.toString().slice(0, 200)}`);
+    }
     finished = true;
     resolveEnd?.();
   });
@@ -213,13 +233,15 @@ export async function openTtsStream(opts: {
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ text: "" })); // end-of-input sentinel
       }
-      if (finished) return;
-      await new Promise<void>((resolve) => {
-        resolveEnd = resolve;
-        // A dropped isFinal must never wedge a call.
-        setTimeout(resolve, 15_000).unref?.();
-      });
+      if (!finished) {
+        await new Promise<void>((resolve) => {
+          resolveEnd = resolve;
+          // A dropped isFinal must never wedge a call.
+          setTimeout(resolve, 15_000).unref?.();
+        });
+      }
       opts.signal?.removeEventListener("abort", onAbort);
+      if (failure) throw failure;
     },
     cancel,
   };

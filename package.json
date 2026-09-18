@@ -13,7 +13,9 @@
     "eval": "pnpm --filter orchestrator eval",
     "journey:check": "pnpm --filter orchestrator journey:check",
     "twilio:check": "pnpm --filter orchestrator twilio:check",
-    "sandbox:mock": "pnpm --filter orchestrator sandbox:mock"
+    "sandbox:mock": "pnpm --filter orchestrator sandbox:mock",
+    "voice:check": "pnpm --filter orchestrator voice:check",
+    "voice:calibrate": "pnpm --filter orchestrator voice:calibrate"
   },
   "engines": {
     "node": ">=20 <21"

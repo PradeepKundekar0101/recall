@@ -7,13 +7,24 @@ import { fileURLToPath } from "node:url";
  * pnpm runs each workspace package with its own cwd, so a bare `dotenv/config`
  * would only ever see apps/orchestrator/.env. Load the workspace root first, then
  * let a package-local .env override it for per-developer settings.
+ *
+ * Anything already in the real process environment outranks both files. Without
+ * this, `MOCK_VOICE=0 pnpm dev:api` is silently ignored because .env says 1 - the
+ * kind of thing that costs twenty minutes at 2am when you are certain you turned
+ * mocking off.
  */
 const here = dirname(fileURLToPath(import.meta.url));
+const fromShell = { ...process.env };
+
 for (const path of [
   resolve(here, "../../../.env"), // workspace root
   resolve(here, "../.env"), // apps/orchestrator/.env
 ]) {
   if (existsSync(path)) loadEnv({ path, override: true });
+}
+
+for (const [key, value] of Object.entries(fromShell)) {
+  if (value !== undefined) process.env[key] = value;
 }
 
 function opt(name: string, fallback = ""): string {

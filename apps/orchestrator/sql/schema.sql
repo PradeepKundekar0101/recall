@@ -9,6 +9,23 @@
 -- the database and back would add a hop and a failure mode on the one surface the
 -- judges actually watch. This is the audit copy.
 
+-- `if not exists` is a silent no-op against a table that already exists under
+-- this name but belongs to something else, and the failure then surfaces as a
+-- missing column on the next statement. This project has already been bitten by
+-- that once, against the carried-over sarvam-buildin project. Fail here, with the
+-- reason, rather than three lines later with a symptom.
+do $$
+begin
+  if to_regclass('public.calls') is not null and not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'calls' and column_name = 'lead_id'
+  ) then
+    raise exception 'a "calls" table that is not this project''s already exists in public'
+      using errcode = 'duplicate_table',
+            hint = 'run sql/0001_drop_sarvam_buildin.sql first, or point SUPABASE_URL at a project of this app''s own';
+  end if;
+end $$;
+
 create table if not exists calls (
   id             uuid primary key,
   lead_id        text        not null,

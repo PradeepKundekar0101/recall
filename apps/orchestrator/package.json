@@ -11,7 +11,9 @@
     "eval": "tsx src/eval/run.ts",
     "journey:check": "tsx src/journey/check.ts",
     "twilio:check": "tsx src/twilio-check.ts",
-    "sandbox:mock": "tsx src/sandbox/mock-server.ts"
+    "sandbox:mock": "tsx src/sandbox/mock-server.ts",
+    "voice:check": "tsx src/voice-check.ts",
+    "voice:calibrate": "tsx src/voice-calibrate.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.126.0",
