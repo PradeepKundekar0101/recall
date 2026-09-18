@@ -25,6 +25,7 @@ const fieldSchema = z.object({
   script: scriptSchema,
   validate: z.string().optional(),
   options: z.array(z.string().min(1)).optional(),
+  synonyms: z.record(z.string(), z.array(z.string().min(1))).optional(),
   max_attempts: z.number().int().min(1).max(5),
   sensitive: z.boolean(),
   ask_when: z

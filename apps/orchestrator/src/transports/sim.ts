@@ -28,6 +28,15 @@ export type Persona = {
   confidence?: number;
   /** Talk over the agent mid-sentence, so barge-in is exercised. */
   interrupts?: boolean;
+  /**
+   * What this persona says to a read-back it has no scripted answer for.
+   *
+   * Every confirm-mode field ends by asking "is that right?", and writing a yes
+   * into every persona for every field would triple the scripts and hide what each
+   * persona is actually testing. Null means the persona ignores read-backs, which
+   * is what the Mumbler needs.
+   */
+  confirmReply?: string | null;
 };
 
 export type PersonaTurn = {
@@ -41,6 +50,9 @@ export type PersonaTurn = {
 };
 
 export type SimOptions = TransportDeps & { persona: Persona };
+
+/** How every confirm-mode script ends. See the journey config's confirm templates. */
+const CONFIRMATION = /(is that right|correct\?|confirmed\?|so that's|shall i go ahead)/i;
 
 export class SimTransport implements Transport {
   readonly kind = "sim" as const;
@@ -103,6 +115,15 @@ export class SimTransport implements Transport {
         return turn;
       }
     }
+
+    // A read-back with no scripted answer. Checked before the open turns so a
+    // confirmation never consumes the answer meant for the next question.
+    if (CONFIRMATION.test(agentLine)) {
+      const reply = this.opts.persona.confirmReply;
+      if (reply === null) return null;
+      return { say: reply ?? "Yes, that's right." };
+    }
+
     for (const [i, turn] of turns.entries()) {
       if (this.used.has(i) || turn.when) continue;
       this.used.add(i);

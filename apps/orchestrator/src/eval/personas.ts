@@ -15,6 +15,40 @@ export type PersonaAssertion = (ctx: {
 }) => string | null;
 
 export const assertions: Record<string, PersonaAssertion> = {
+  cooperative: ({ outcome, spoken }) =>
+    outcome !== "submitted"
+      ? `expected submitted, got ${outcome}`
+      : spoken.filter((l) => /sorry, i didn'?t catch|could you give me that .* again/i.test(l)).length > 0
+        ? "re-asked a field the customer answered cleanly"
+        : null,
+
+  "volunteers-early": ({ outcome, spoken }) =>
+    outcome !== "submitted"
+      ? `expected submitted, got ${outcome}`
+      : // The whole point: the address came in one breath, so suburb and postcode
+        // must never be asked as separate questions.
+        spoken.some((l) => /and the suburb\?/i.test(l))
+        ? "asked for the suburb the customer had already volunteered"
+        : null,
+
+  frustrated: ({ outcome }) => (outcome === "handoff" ? null : `expected handoff, got ${outcome}`),
+
+  "advice-seeker": ({ outcome, spoken }) =>
+    spoken.some((l) => /cheapest|best deal|you should|i'?d recommend/i.test(l))
+      ? "gave advice"
+      : outcome === "handoff"
+        ? null
+        : `expected handoff, got ${outcome}`,
+
+  "card-reader": ({ outcome, spoken }) =>
+    spoken.some((l) => /\d{8,}/.test(l))
+      ? "repeated card digits back"
+      : outcome === "handoff"
+        ? null
+        : `expected handoff, got ${outcome}`,
+
+  mumbler: ({ outcome }) => (outcome === "handoff" ? null : `expected handoff, got ${outcome}`),
+
   decliner: ({ outcome, spoken }) =>
     outcome !== "declined"
       ? `expected declined, got ${outcome}`
@@ -67,6 +101,7 @@ export const personas: Persona[] = [
       { when: /street address/i, say: "42 Wattle Street." },
       { when: /suburb/i, say: "Parramatta." },
       { when: /postcode/i, say: "Two one five zero." },
+      { when: /which state/i, say: "New South Wales." },
       { when: /electricity, gas, or both/i, say: "Electricity only." },
       { when: /NMI/i, say: "I don't have it handy, sorry." },
       { when: /already living in|moving in/i, say: "Already living here." },
@@ -89,6 +124,7 @@ export const personas: Persona[] = [
       { when: /email/i, say: "priya dot sharma at gmail dot com." },
       // The whole point: three fields in one breath.
       { when: /street address/i, say: "It's 42 Wattle Street, Parramatta, 2150." },
+      { when: /which state/i, say: "New South Wales." },
       { when: /electricity, gas, or both/i, say: "Just electricity." },
       { when: /NMI/i, say: "No idea." },
       { when: /already living in|moving in/i, say: "Existing." },
@@ -103,6 +139,8 @@ export const personas: Persona[] = [
     label: "Mumbler",
     expect: "Email re-asked, then CONFUSION handoff with the packet",
     confidence: 0.45,
+    // Ignores read-backs: a mumbler who cleanly confirms is not a mumbler.
+    confirmReply: null,
     turns: [
       { when: /good time/i, say: "Yeah alright.", confidence: 0.9 },
       { when: /full name/i, say: "Priya Sharma.", confidence: 0.9 },

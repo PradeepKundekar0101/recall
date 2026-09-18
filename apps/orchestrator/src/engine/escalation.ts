@@ -69,6 +69,21 @@ const ROBOT_PATTERNS = /\b(a bot|a robot|a machine|are you (a )?(real|human)|am 
  * Intent the engine can decide without the model. Returns null when only the
  * extractor can tell, which is the common case for an ordinary answer.
  */
+/**
+ * "I don't have it handy."
+ *
+ * Only meaningful on an optional field, where the script has already told the
+ * customer it is fine not to know - NMI's ask literally says "it's fine if you
+ * don't, we can look it up". Re-asking after that makes the agent sound like it
+ * was not listening to its own sentence.
+ */
+const DONT_KNOW_PATTERNS =
+  /\b(don'?t (have|know)|haven'?t got|not sure|no idea|can'?t find|couldn'?t tell you|not handy|somewhere else|skip (it|that))\b/i;
+
+export function looksLikeDontKnow(text: string): boolean {
+  return DONT_KNOW_PATTERNS.test(text);
+}
+
 export function ruleIntent(text: string): "decline" | "busy" | "ask_human" | "robot_check" | null {
   // Order matters. A decline outranks everything, including a request for a human:
   // "no, don't put me through to anyone, just stop calling" is a decline.
@@ -147,6 +162,17 @@ export type DetectInput = {
   /** Attempts on the field currently being asked, for CONFUSION. */
   attempts: number;
   maxAttempts: number;
+  /**
+   * The turn cleanly answered the closed question that was asked.
+   *
+   * "No." is the correct answer to "do you hold a concession card", and a
+   * sentiment classifier handed a bare "No." with no context rates it as hostile
+   * - which handed the call to a human in the middle of a perfectly good
+   * conversation. A clean answer to a closed question is not an emotional signal,
+   * so ANGER is skipped, which also saves a model round trip on the commonest
+   * kind of turn in the whole journey.
+   */
+  closedAnswer?: boolean;
   state: DetectorState;
 };
 
@@ -214,7 +240,7 @@ export async function detect(input: DetectInput): Promise<SignalReading[]> {
   let sentiment = pattern ? -0.8 : 0;
   let evidence = pattern ? utterance.slice(0, 80) : "";
 
-  if (!pattern) {
+  if (!pattern && !input.closedAnswer) {
     const { value } = await toolCall<{ sentiment: number; evidence: string }>({
       system: "You rate one turn of a customer service call. Be decisive.",
       user: utterance,

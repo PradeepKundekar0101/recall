@@ -37,6 +37,28 @@ const TOOL = {
 
 const UTTERANCE = "Yeah it's 42 Wattle Street, Parramatta, and the postcode is two one five zero.";
 
+/**
+ * Repeats the measurement on a warm client.
+ *
+ * The first call pays DNS, TLS and connection setup, which a long-running
+ * orchestrator pays once at boot and never again. A single cold sample would
+ * condemn a provider for a cost the demo does not actually incur, so steady state
+ * is what gets reported.
+ */
+const SAMPLES = Number(process.env.SAMPLES ?? 4);
+
+function summarise(label: string, values: number[]): void {
+  if (!values.length) return;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 ? sorted[mid]! : Math.round((sorted[mid - 1]! + sorted[mid]!) / 2);
+  console.log(
+    `${label.padEnd(10)} cold ${String(values[0]).padStart(5)}ms   ` +
+      `warm median ${String(median).padStart(5)}ms   ` +
+      `warm range ${Math.min(...values.slice(1))}-${Math.max(...values.slice(1))}ms`
+  );
+}
+
 async function main(): Promise<void> {
   if (env.mockVoice) {
     console.error("MOCK_VOICE=1 - this check only means something with it off.");
@@ -48,43 +70,64 @@ async function main(): Promise<void> {
   }
 
   console.log(`provider  ${env.llmProvider}`);
-  console.log(`model     ${env.dialogueModel}\n`);
+  console.log(`model     ${env.dialogueModel}`);
+  console.log(`samples   ${SAMPLES} (first is cold)\n`);
 
   // ---- structured extraction ---------------------------------------------
-  const t0 = Date.now();
-  const { value } = await toolCall<{ patches?: { field: string; value: string }[]; intent?: string }>({
-    system:
-      "You extract structured answers from one turn of a phone call about an Australian energy plan. " +
-      "Record only fields the customer actually gave. Report values verbatim.",
-    user: UTTERANCE,
-    tool: TOOL,
-    mock: { patches: [], intent: "unclear" },
-  });
-  const toolMs = Date.now() - t0;
+  const toolTimes: number[] = [];
+  let patches: { field: string; value: string }[] = [];
+  let intent = "?";
 
-  const patches = value.patches ?? [];
-  console.log(`tool call ${toolMs}ms`);
-  console.log(`          intent=${value.intent ?? "?"} patches=${patches.length}`);
+  for (let i = 0; i < SAMPLES; i++) {
+    const t0 = Date.now();
+    const { value } = await toolCall<{ patches?: { field: string; value: string }[]; intent?: string }>({
+      system:
+        "You extract structured answers from one turn of a phone call about an Australian energy plan. " +
+        "Record only fields the customer actually gave. Report values verbatim.",
+      user: UTTERANCE,
+      tool: TOOL,
+      mock: { patches: [], intent: "unclear" },
+    });
+    toolTimes.push(Date.now() - t0);
+    patches = value.patches ?? [];
+    intent = value.intent ?? "?";
+  }
+
+  console.log(`extracted intent=${intent} patches=${patches.length}`);
   for (const p of patches) console.log(`          ${p.field} = ${p.value}`);
+  console.log("");
 
   const fields = new Set(patches.map((p) => p.field));
   const wanted = ["street", "suburb", "postcode"];
   const missing = wanted.filter((f) => !fields.has(f));
 
   // ---- streaming ----------------------------------------------------------
-  console.log("");
-  const t1 = Date.now();
-  let firstSentenceMs: number | null = null;
-  let sentences = 0;
-  for await (const sentence of streamSentences({
-    system: "You are a concise Australian call-centre assistant. One short sentence.",
-    messages: [{ role: "user", content: "Say the line: Got that, thanks." }],
-  })) {
-    firstSentenceMs ??= Date.now() - t1;
-    sentences++;
-    void sentence;
+  const streamTimes: number[] = [];
+  for (let i = 0; i < SAMPLES; i++) {
+    const t1 = Date.now();
+    let first: number | null = null;
+    for await (const sentence of streamSentences({
+      system: "You are a concise Australian call-centre assistant. One short sentence.",
+      messages: [{ role: "user", content: "Say the line: Got that, thanks." }],
+    })) {
+      first ??= Date.now() - t1;
+      void sentence;
+    }
+    streamTimes.push(first ?? Date.now() - t1);
   }
-  console.log(`stream    first sentence in ${firstSentenceMs ?? "n/a"}ms, ${sentences} total`);
+
+  summarise("tool call", toolTimes);
+  summarise("stream", streamTimes);
+
+  const toolWarm = toolTimes.slice(1);
+  const streamWarm = streamTimes.slice(1);
+  const medianOf = (xs: number[]) => {
+    const s2 = [...xs].sort((a, b) => a - b);
+    const m = Math.floor(s2.length / 2);
+    return s2.length % 2 ? s2[m]! : Math.round((s2[m - 1]! + s2[m]!) / 2);
+  };
+  const toolMs = toolWarm.length ? medianOf(toolWarm) : toolTimes[0]!;
+  const firstSentenceMs = streamWarm.length ? medianOf(streamWarm) : streamTimes[0]!;
 
   // ---- verdict ------------------------------------------------------------
   console.log("");
@@ -96,11 +139,15 @@ async function main(): Promise<void> {
     console.error(`WARN  did not extract ${missing.join(", ")} from a turn that contained them`);
   }
 
-  const budget = toolMs > 1500 || (firstSentenceMs ?? 0) > 1500;
+  // The per-turn budget is ~800ms end to end, of which the model gets ~250ms to
+  // first token. Anything past a second makes the call feel like a walkie-talkie.
+  const budget = toolMs > 1000 || firstSentenceMs > 1000;
   if (budget) {
     console.error(
-      `WARN  slow for a phone call. The turn budget allows ~250ms to first token;\n` +
-        `      measure a direct provider key before committing to this one for the demo.`
+      `WARN  too slow for a live phone call.\n` +
+        `      The turn budget allows ~250ms to first token and ~800ms end to end;\n` +
+        `      warm medians here are ${toolMs}ms extraction and ${firstSentenceMs}ms to first sentence.\n` +
+        `      Try a smaller model, or a direct provider key, before the demo.`
     );
   }
   console.log(missing.length || budget ? "Usable, with the caveats above." : "All checks passed.");

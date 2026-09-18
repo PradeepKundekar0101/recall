@@ -126,6 +126,12 @@ export const env = {
   transport: (opt("TRANSPORT", "sim") === "pstn" ? "pstn" : "sim") as "pstn" | "sim",
   ignoreCallWindow: flag("IGNORE_CALL_WINDOW", false),
 
+  /**
+   * If the model has not answered within this long, play a short pre-rendered
+   * acknowledgement so the line is never silent while it thinks.
+   */
+  fillerAfterMs: num("FILLER_AFTER_MS", 400),
+
   /** Silence on an open question: nudge, nudge again, then close as abandoned. */
   silenceNudgeMs: num("SILENCE_NUDGE_MS", 6000),
   silenceSecondNudgeMs: num("SILENCE_SECOND_NUDGE_MS", 12000),

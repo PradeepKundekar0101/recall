@@ -28,7 +28,15 @@ export function loadLeads(): Lead[] {
   cached = raw.map((lead) => ({
     ...lead,
     phone: testNumber,
-    prefill: { ...lead.prefill, ...(lead.prefill.phone !== undefined ? { phone: testNumber } : {}) },
+    prefill: {
+      ...lead.prefill,
+      ...(lead.prefill.phone !== undefined ? { phone: testNumber } : {}),
+      // The plan the customer was already looking at when they dropped out. It
+      // belongs in the prefill so the agent confirms it in one line ("you were
+      // looking at X, shall I put you down for that?") rather than asking a
+      // dropped-off lead to name a plan it already knows.
+      ...(lead.plan_id ? { plan_id: lead.plan_id } : {}),
+    },
   }));
   return cached;
 }

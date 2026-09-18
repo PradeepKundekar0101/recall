@@ -1,5 +1,6 @@
 import type { CallOutcome, Journey, JourneyField, Lead } from "@recall/shared";
 import { Form } from "./fact-bus.js";
+import { speakableValue } from "./normalise.js";
 
 /**
  * Everything one call knows about itself.
@@ -96,20 +97,59 @@ export class JourneyState {
     return template.replace(/\{(\w+)\}/g, (match, key: string) => vars[key] ?? match);
   }
 
-  /** One-line read-back of the confirmed form, for the review gate. */
+  /**
+   * The review read-back.
+   *
+   * Spoken to a person at the end of a three-minute call, so it is a sentence
+   * rather than a dump of every stored value. Bare booleans are the problem: a
+   * list containing "yes, no, no" tells the customer nothing, so they are spoken
+   * with their label ("no concession") and dropped when they are false and
+   * uninteresting. The phone number is skipped because it was confirmed a minute
+   * earlier and reading digits back twice is what makes these calls feel long.
+   */
   reviewSummary(): string {
-    return this.journey.fields
-      .filter((f) => f.required && this.form.applies(f.id))
-      .map((f) => this.form.get(f.id)?.value)
-      .filter((v) => v !== null && v !== undefined && v !== "")
-      .join(", ");
+    const parts: string[] = [];
+
+    for (const field of this.journey.fields) {
+      if (!field.required || !this.form.applies(field.id)) continue;
+      if (field.id === "phone") continue;
+
+      const value = this.form.get(field.id)?.value;
+      if (value === null || value === undefined || value === "") continue;
+
+      if (field.type === "bool") {
+        // "no life support" is worth saying; "yes account holder" is not.
+        if (value === true && field.id !== "account_holder") parts.push(field.label.toLowerCase());
+        if (value === false) parts.push(`no ${field.label.toLowerCase()}`);
+        continue;
+      }
+      // The plan id is what the payload needs; the plan name is what the customer
+      // recognises. Reading "PLAN-EN-0331" back to someone is not a confirmation.
+      if (field.id === "plan_id" && this.lead.plan_name) {
+        parts.push(this.lead.plan_name);
+        continue;
+      }
+      parts.push(speakableValue(field, value));
+    }
+
+    return parts.join(", ");
   }
+
+  /**
+   * Short acknowledgements played while the model is still thinking.
+   *
+   * Rotated rather than fixed, because hearing the identical "Got it." after every
+   * single answer is its own kind of robotic. Pre-rendered like every other fixed
+   * line, so they cost nothing to play.
+   */
+  static readonly FILLERS = ["Got it.", "Right.", "Okay.", "Thanks."];
 
   /** Every fixed line this call can speak, for pre-rendering at boot. */
   static fixedLines(journey: Journey): string[] {
     return [
       ...Object.values(journey.scripts),
       ...journey.sections.map((s) => s.intro),
+      ...JourneyState.FILLERS,
       "Sorry, are you still there?",
       "I'll let you go for now. Thanks for your time.",
     ];

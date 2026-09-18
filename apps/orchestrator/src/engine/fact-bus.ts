@@ -14,8 +14,9 @@ import type { FieldState, FieldValue, FormField, FormState, Journey, Lead } from
  * The state machine:
  *
  *   empty -> asking -> captured -> confirmed -> submitted
- *              ^          |
- *              +----------+  (read-back rejected, or validation failed)
+ *              ^   \         |
+ *              |    +--------+------> confirmed   (confirm mode "none")
+ *              +-------------+  (read-back rejected, or validation failed)
  *
  *   prefilled -> confirmed      (carried in on the lead, confirmed in one line)
  *   any       -> redacted       (sensitive data intercepted)
@@ -26,9 +27,15 @@ import type { FieldState, FieldValue, FormField, FormState, Journey, Lead } from
  */
 
 const ALLOWED: Record<FieldState, FieldState[]> = {
-  empty: ["asking", "prefilled", "redacted"],
+  // A field can be filled without ever being asked, and both routes matter here:
+  // the customer volunteering "42 Wattle Street, Parramatta 2150" fills suburb and
+  // postcode while street was the question, and state is inferred from the
+  // postcode rather than asked at all. Both are the efficiency number in action.
+  empty: ["asking", "prefilled", "captured", "confirmed", "redacted"],
   prefilled: ["asking", "confirmed", "captured", "redacted"],
-  asking: ["captured", "asking", "empty", "redacted"],
+  // asking -> confirmed is legitimate and common: a field with confirm "none"
+  // has no read-back to wait for, so every closed yes/no answer lands here.
+  asking: ["captured", "confirmed", "asking", "empty", "redacted"],
   captured: ["confirmed", "asking", "empty", "redacted"],
   confirmed: ["submitted", "asking", "redacted"],
   submitted: ["redacted"],

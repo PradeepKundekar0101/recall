@@ -30,6 +30,42 @@ type Result = { id: string; label: string; passed: boolean; detail: string; skip
  */
 const RULE_ONLY = new Set(["decliner", "busy", "robot-checker"]);
 
+/**
+ * Waits for a conversation to actually finish.
+ *
+ * The sim transport drives turns from inside speak(), so the engine is still
+ * working when begin() resolves. A fixed sleep was enough while the model was
+ * mocked and turns were instant; against a live model a single turn can take
+ * seconds, and the harness was scoring calls that had only reached consent.
+ *
+ * Settles on the engine finalising, or on the agent going quiet - a persona that
+ * runs out of scripted turns never produces an outcome, and that is correct
+ * behaviour for the Robot checker rather than a failure.
+ */
+async function settle(
+  engine: ReturnType<typeof createEngine>,
+  transport: SimTransport,
+  opts: { quietMs?: number; capMs?: number } = {}
+): Promise<void> {
+  const quietMs = opts.quietMs ?? 4000;
+  const capMs = opts.capMs ?? 120_000;
+  const deadline = Date.now() + capMs;
+
+  let lastCount = transport.spoken.length;
+  let lastChange = Date.now();
+
+  while (Date.now() < deadline) {
+    if (engine.isFinalised) return;
+    await new Promise((r) => setTimeout(r, 200));
+    if (transport.spoken.length !== lastCount) {
+      lastCount = transport.spoken.length;
+      lastChange = Date.now();
+    } else if (Date.now() - lastChange > quietMs) {
+      return;
+    }
+  }
+}
+
 async function main(): Promise<void> {
   const only = process.argv.find((a) => a.startsWith("--persona="))?.split("=")[1];
   const selected = only ? [personaById(only)].filter(Boolean) : personas.filter((p) => p.id !== "echo");
@@ -82,6 +118,7 @@ async function main(): Promise<void> {
         onHandoff: () => {},
         onGuardrail: () => {},
         onOutcome: () => {},
+        onSubmit: () => {},
         persistField: () => {},
       },
     });
@@ -89,10 +126,7 @@ async function main(): Promise<void> {
     try {
       await transport.start();
       await engine.begin();
-      // The sim transport drives the conversation forward from inside speak(), so
-      // by the time begin() resolves the persona has run to the end of its script.
-      // Wait for any in-flight turn to settle before judging the outcome.
-      await new Promise((r) => setTimeout(r, 50));
+      await settle(engine, transport);
 
       const outcome = engine.state.outcome;
       const handsFree = engine.state.form.handsFree();

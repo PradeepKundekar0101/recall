@@ -62,6 +62,14 @@ export type JourneyField = {
   /** Allowed values when `type` is "enum". */
   options?: string[];
   /**
+   * Phrases that mean an option but do not contain it.
+   *
+   * "Already living here" means `existing` and shares no words with it. The
+   * extractor usually maps this itself, but models sometimes echo the customer
+   * instead, and a declarative list is cheaper than a re-ask.
+   */
+  synonyms?: Record<string, string[]>;
+  /**
    * Re-asks allowed before the CONFUSION escalation signal fires.
    * The brief's threshold is 2.
    */
