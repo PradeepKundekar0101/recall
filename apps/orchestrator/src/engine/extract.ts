@@ -182,7 +182,21 @@ export async function extract(opts: {
       continue;
     }
 
-    const result = normalise(field, patch.value);
+    /**
+     * For spelled fields, the customer's own words beat the model's rendering.
+     *
+     * Asked to spell an address the customer says "p-r-i-y-a dot sharma at gmail
+     * dot com", and the model returned "priyaa.sharma@gmail.com" - one letter
+     * wrong on the field the demo reads back letter by letter. Joining the
+     * spelled run is deterministic string work, so it belongs in code; the
+     * model's value is kept only as the fallback.
+     */
+    let result = normalise(field, patch.value);
+    if (field.capture === "spell") {
+      const fromSpeech = normalise(field, patch.evidence || utterance);
+      if (fromSpeech.ok) result = fromSpeech;
+    }
+
     if (!result.ok) {
       rejected.push({ field: patch.field, reason: result.reason, evidence: patch.evidence });
       continue;

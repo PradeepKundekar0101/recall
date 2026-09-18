@@ -335,7 +335,21 @@ export class EscalationDetector {
   resolveAnger(readings: SignalReading[], opts: { producedAnswers: boolean; patternMatched: boolean }): void {
     const anger = readings.find((r) => r.signal === "ANGER");
     if (!anger?.fired) return;
-    if (!opts.patternMatched && opts.producedAnswers) return;
+
+    // An unambiguous phrase fires on the spot: "I've already told three of you"
+    // needs no corroboration.
+    if (opts.patternMatched) return void this.fire(anger);
+
+    // A model-only judgement does not. The brief allows a single score of -0.6 to
+    // trigger, but measured against real turns the classifier reads ordinary
+    // answers as hostile often enough that honouring one reading ends good calls
+    // - "I don't have it handy, sorry" is not a customer in distress. A false
+    // handoff mid-journey is far more expensive than a late one: the sustained
+    // signal still fires a turn later, and a genuinely angry customer does not
+    // calm down in the interim.
+    if (opts.producedAnswers) return;
+    if (this.state.angerStreak < 2) return;
+
     this.fire(anger);
   }
 

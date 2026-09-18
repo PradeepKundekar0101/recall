@@ -8,7 +8,7 @@ import type { Form } from "./fact-bus.js";
 import { EscalationDetector, angerPatternMatched, looksLikeDontKnow, redactDigits, ruleIntent, type SignalReading } from "./escalation.js";
 import { extract } from "./extract.js";
 import { normaliseBool, speakableValue } from "./normalise.js";
-import { submitFinal } from "../sandbox/submit.js";
+import { submitFinal, submitSection } from "../sandbox/submit.js";
 import type { Transport, TransportEndReason } from "./transport.js";
 
 /**
@@ -92,9 +92,18 @@ export class DialogueEngine {
   /** Opener and consent. Nothing can enter a field state before this returns. */
   async begin(): Promise<void> {
     const { scripts } = this.state.journey;
-    this.state.phase = "opener";
-    await this.speak(this.state.render(scripts.opener));
+
+    // The phase moves to `consent` before the opener is spoken, not after.
+    //
+    // A customer can answer while the opener is still playing - barge-in exists
+    // precisely because they do - and the reply is then handled in whatever phase
+    // is current at that moment. Setting it afterwards left a window where an
+    // answer arrived in phase `opener`, which neither the consent branch nor the
+    // anger suppression recognises, so "Fine, but be quick" was read as hostility
+    // and the call was handed to a human on turn one. It also made the whole
+    // suite flaky, since whether the window was hit depended on timing.
     this.state.phase = "consent";
+    await this.speak(this.state.render(scripts.opener));
     this.armSilence();
   }
 
@@ -110,10 +119,16 @@ export class DialogueEngine {
     this.nudges = 0;
 
     // Guardrail 3: a digit run never reaches the transcript, the log or a screen.
+    //
+    // The redacted copy is for display and storage only. Redacting before
+    // detection meant the SENSITIVE detector never saw the card number it exists
+    // to catch - the digits were already [REDACTED] by the time it looked - so
+    // reading a card out ended the call as a decline instead of a handoff.
     const text = redactDigits(raw);
     if (text !== raw) {
       this.hooks.onGuardrail("NO_CARD_DATA", "digit run redacted from the transcript");
     }
+    this.state.say("customer", text, confidence);
     this.hooks.onCustomerLine(text, confidence);
 
     // A second utterance while a reply is still being composed cancels the first.
@@ -148,15 +163,22 @@ export class DialogueEngine {
           sttConfidence: confidence,
         }),
         this.detector.evaluate({
-          utterance: text,
+          // Raw, not redacted: this is the only consumer that needs the digits.
+          utterance: raw,
           intent: "answer",
           sttConfidence: confidence,
           attempts: asking ? (this.state.form.get(asking.id)?.attempts ?? 0) : 0,
           maxAttempts: asking?.max_attempts ?? 2,
           // A short yes/no to a closed question, or a yes to a read-back, is an
           // answer rather than a mood.
+          // A yes or no is an answer wherever it appears: to a closed field, to a
+          // read-back, or to the consent question. "Fine, but be quick" was being
+          // rated as anger and handing off on turn one, when it is simply
+          // someone agreeing while telling you they are busy.
           closedAnswer:
-            (asking?.capture === "closed" || this.state.awaitingConfirm.length > 0) &&
+            (asking?.capture === "closed" ||
+              this.state.awaitingConfirm.length > 0 ||
+              this.state.phase === "consent") &&
             normaliseBool(text) !== null &&
             text.length < 40,
         }).then((r) => {
@@ -188,11 +210,48 @@ export class DialogueEngine {
   private async decide(text: string, extraction: Awaited<ReturnType<typeof extract>>): Promise<void> {
     const { scripts } = this.state.journey;
 
-    switch (extraction.intent) {
-      case "decline":
-        return this.decline();
-      case "busy":
-        return this.callback(text);
+    // A yes or no to a closed question is an answer, decided here and not by the
+    // model.
+    //
+    // "No." to "do you hold a concession card" was ending the call: the extractor
+    // returned no patch and guessed intent=decline, and the engine believed it.
+    // The commonest turn in the whole journey should not depend on a model's
+    // reading of a two-letter utterance stripped of its question - so it is
+    // resolved directly, which is both safer and one round trip cheaper.
+    const askingField = this.state.asking ? this.state.fieldById(this.state.asking) : undefined;
+    if (askingField?.capture === "closed" && askingField.type === "bool") {
+      const said = normaliseBool(text);
+      if (said !== null) {
+        this.state.form.set(askingField.id, {
+          state: askingField.confirm === "none" ? "confirmed" : "captured",
+          value: said,
+          confidence: 1,
+          evidence: text.slice(0, 80),
+        });
+        return askingField.confirm === "none" ? this.askNext() : this.confirm([askingField.id]);
+      }
+    }
+
+    // The model's intent is only trusted when the turn produced nothing.
+    //
+    // "No." is the correct answer to "do you hold a concession card", and a
+    // classifier reading it without the question in front of it returns
+    // intent=decline - which ends the call on a customer who was answering
+    // perfectly well. The unambiguous phrasings ("not interested", "stop
+    // calling") are caught by ruleIntent before this, and those are trusted
+    // regardless; this switch only sees the model's guess.
+    const answeredSomething = extraction.accepted.length > 0;
+
+    switch (answeredSomething ? "answer" : extraction.intent) {
+      // decline and busy are deliberately absent.
+      //
+      // Both end the call, and decline also adds a permanent opt-out, so they
+      // are the two outcomes least tolerable to get wrong. The model returned
+      // intent=decline for an angry customer mid-journey and for someone reading
+      // out a card number - neither was hanging up. Those paths are driven by
+      // ruleIntent's explicit phrasings instead, which cost a missed hint at
+      // worst; a customer who genuinely wants to go says so unmistakably, and
+      // usually twice.
       case "ask_human":
         return this.handoff("ASKS", text);
       case "question": {
@@ -339,6 +398,14 @@ export class DialogueEngine {
     if (!field) return this.review();
 
     const section = field.section;
+
+    // A completed section goes to the sandbox immediately rather than waiting for
+    // the final POST. This is the whole reason for doing it incrementally: a call
+    // that escalates at Supply has already saved Identity and Contact, so the
+    // human picks up a journey that is genuinely further along instead of one
+    // that exists only in memory.
+    this.flushCompletedSections();
+
     if (this.state.phase !== "section" || this.state.currentSection() !== section) {
       const intro = this.state.journey.sections.find((s) => s.id === section)?.intro;
       this.state.phase = "section";
@@ -433,6 +500,35 @@ export class DialogueEngine {
   }
 
   /**
+   * Sends any section that has just become complete.
+   *
+   * Deliberately not awaited. A sandbox that is slow or down must not add latency
+   * to the next question or stall the call - the final POST is the gate that
+   * decides whether the journey counts, and this is an optimisation on top of it.
+   */
+  private flushCompletedSections(): void {
+    for (const section of this.state.journey.sections) {
+      if (this.state.submittedSections.has(section.id)) continue;
+      if (!this.state.sectionComplete(section.id)) continue;
+
+      this.state.submittedSections.add(section.id);
+      void submitSection({
+        lead: this.state.lead,
+        form: this.state.form.snapshot(),
+        section: section.id,
+        consentAt: this.state.consentAt ?? Date.now(),
+      })
+        .then((result) => this.hooks.onSubmit(result.step, result.status, result.body))
+        .catch((err) => {
+          // Logged, not surfaced: a failed partial save is recoverable by the
+          // final POST, and the customer should never hear about it.
+          log.call(this.callId, `section ${section.id} PUT failed: ${String(err)}`);
+          this.state.submittedSections.delete(section.id);
+        });
+    }
+  }
+
+  /**
    * Builds the payload and sends it.
    *
    * The engine refuses to submit while any required, applicable field is
@@ -479,6 +575,7 @@ export class DialogueEngine {
   // -------------------------------------------------------------- exit paths
 
   private async decline(): Promise<void> {
+    log.call(this.callId, `DECLINE triggered by: "${this.state.transcript.at(-1)?.text ?? "?"}"`);
     this.state.phase = "decline";
     this.hooks.onGuardrail("RESPECT_NO", "declined; opted out, no second ask");
     await this.speak(this.state.journey.scripts.decline);
@@ -503,6 +600,8 @@ export class DialogueEngine {
     this.cancelTurn("handoff");
     this.state.phase = "handoff";
     this.state.handoffReason = reason;
+    // Whatever is complete goes to the sandbox before the line changes hands.
+    this.flushCompletedSections();
     log.call(this.callId, `handoff: ${reason} - ${evidence.slice(0, 60)}`);
 
     this.hooks.onHandoff(reason, evidence);
@@ -549,6 +648,7 @@ export class DialogueEngine {
       // Keeping the model out of the speech path also takes it off the critical
       // path entirely: a turn now costs one extraction call, not two round trips.
       if (!opts.generate || env.mockVoice) {
+        this.state.say("agent", text, null);
         this.hooks.onAgentLine(text);
         await this.transport.speak(text);
         return;
@@ -564,7 +664,10 @@ export class DialogueEngine {
         }),
         controller.signal
       );
-      if (!controller.signal.aborted) this.hooks.onAgentLine(spoken || text);
+      if (!controller.signal.aborted) {
+        this.state.say("agent", spoken || text, null);
+        this.hooks.onAgentLine(spoken || text);
+      }
     } finally {
       if (this.turn === controller) this.turn = null;
     }

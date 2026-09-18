@@ -169,7 +169,10 @@ export async function startCall(opts: {
                 evidence,
                 fields: state.form.snapshot(),
                 next_field: state.nextField()?.id ?? null,
-                transcript: [],
+                // The last five lines, which is what the human console renders.
+                // This is the panel that proves the customer does not repeat
+                // themselves, so shipping it empty defeated the whole feature.
+                transcript: state.transcript.slice(-5),
                 duration_s: state.durationSeconds,
               },
             });

@@ -1,4 +1,4 @@
-import type { CallOutcome, Journey, JourneyField, Lead } from "@recall/shared";
+import type { CallOutcome, Journey, JourneyField, Lead, TranscriptLine } from "@recall/shared";
 import { Form } from "./fact-bus.js";
 import { speakableValue } from "./normalise.js";
 
@@ -48,6 +48,19 @@ export class JourneyState {
 
   private cursor = 0;
 
+  /**
+   * What was said, in order.
+   *
+   * Held on the call rather than only streamed, because the handoff packet needs
+   * the last few lines and a human joining the call has no other way to see them.
+   * Capped because a long call should not grow without bound; the cap is well
+   * past any realistic call length.
+   */
+  readonly transcript: TranscriptLine[] = [];
+
+  /** Sections already sent to the sandbox, so a section is never PUT twice. */
+  readonly submittedSections = new Set<string>();
+
   constructor(
     readonly callId: string,
     readonly journey: Journey,
@@ -55,6 +68,26 @@ export class JourneyState {
   ) {
     this.form = new Form(journey, callId);
     this.form.applyLead(lead);
+  }
+
+  say(speaker: "agent" | "customer", text: string, confidence: number | null): void {
+    this.transcript.push({ at: Date.now(), speaker, text, confidence, final: true });
+    if (this.transcript.length > 500) this.transcript.shift();
+  }
+
+  /**
+   * A section is complete when every applicable field in it is confirmed.
+   *
+   * Optional fields count once they have been asked and resolved, including the
+   * ones the customer did not have - those are recorded confirmed with no value.
+   */
+  sectionComplete(sectionId: string): boolean {
+    const fields = this.journey.fields.filter((f) => f.section === sectionId && this.form.applies(f.id));
+    if (!fields.length) return false;
+    return fields.every((f) => {
+      const state = this.form.get(f.id)?.state;
+      return state === "confirmed" || state === "submitted";
+    });
   }
 
   get consent(): boolean {

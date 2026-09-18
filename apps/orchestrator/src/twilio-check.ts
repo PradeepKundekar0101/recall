@@ -39,12 +39,36 @@ async function run(): Promise<void> {
     add("from number", false, err instanceof Error ? err.message : String(err));
   }
 
-  // Geo permissions: dialling AU has to be enabled, and it is off by default.
-  try {
-    const perms = await client.voice.v1.dialingPermissions.countries("AU").fetch();
-    add("AU dialing", Boolean(perms.lowRiskNumbersEnabled), perms.lowRiskNumbersEnabled ? "enabled" : "DISABLED in Twilio geo permissions");
-  } catch (err) {
-    add("AU dialing", false, err instanceof Error ? err.message : String(err));
+  /**
+   * Geo permissions for the countries actually being dialled.
+   *
+   * This used to hardcode AU, which reported "enabled" while the configured test
+   * number was Indian - a green check for a country the demo never calls. Twilio
+   * disables most countries by default and surfaces the refusal as an opaque call
+   * failure, so it is worth resolving the real country of every test number.
+   */
+  const countries = new Set<string>();
+  for (const number of [...env.testNumbers, env.handoffNumber].filter(Boolean)) {
+    try {
+      const lookup = await client.lookups.v2.phoneNumbers(number).fetch();
+      if (lookup.countryCode) countries.add(lookup.countryCode);
+    } catch {
+      add("lookup", false, `could not resolve the country for ${number}`);
+    }
+  }
+
+  for (const country of countries) {
+    try {
+      const perms = await client.voice.v1.dialingPermissions.countries(country).fetch();
+      const enabled = Boolean(perms.lowRiskNumbersEnabled);
+      add(
+        `dialing ${country}`,
+        enabled,
+        enabled ? "enabled" : `DISABLED in Twilio geo permissions - calls to ${country} will fail`
+      );
+    } catch (err) {
+      add(`dialing ${country}`, false, err instanceof Error ? err.message : String(err));
+    }
   }
 
   add(
@@ -52,7 +76,19 @@ async function run(): Promise<void> {
     env.testNumbers.length > 0,
     env.testNumbers.length ? env.testNumbers.join(", ") : "TEST_NUMBERS is empty - every dial will be refused"
   );
-  add("handoff number", has.handoff(), env.handoffNumber || "HANDOFF_NUMBER unset - warm transfer has nowhere to go");
+  // A handoff that dials the number already on the call cannot connect anyone.
+  // The demo needs a second handset, and finding that out on stage is expensive.
+  if (!has.handoff()) {
+    add("handoff number", false, "HANDOFF_NUMBER unset - warm transfer has nowhere to go");
+  } else if (env.testNumbers.includes(env.handoffNumber)) {
+    add(
+      "handoff number",
+      false,
+      `${env.handoffNumber} is also a TEST_NUMBER - a transfer would dial the phone already on the call. Use a second handset.`
+    );
+  } else {
+    add("handoff number", true, env.handoffNumber);
+  }
 
   // The tunnel must accept an anonymous websocket upgrade. Twilio sends no auth.
   await checkTunnel();

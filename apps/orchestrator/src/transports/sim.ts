@@ -92,13 +92,25 @@ export class SimTransport implements Transport {
     // line to finish, which is what arms barge-in in the real transport.
     if (this.opts.persona.interrupts) this.bargeInCb?.();
 
-    if (turn.delayMs) await new Promise((r) => setTimeout(r, turn.delayMs));
+    await new Promise((r) => setTimeout(r, turn.delayMs ?? 10));
     if (this.dead) return;
 
     const confidence = turn.confidence ?? this.opts.persona.confidence ?? 0.95;
     this.partialCb?.(turn.say);
     log.call(this.id, `customer: ${turn.say} (conf ${confidence})`);
-    this.utteranceCb?.(turn.say, confidence);
+
+    // Delivered after speak() has returned, not inside it.
+    //
+    // Firing the callback synchronously re-entered the engine in the middle of
+    // its own turn, so state the engine sets just after speaking had not been set
+    // yet when the reply arrived. On a real call the customer's audio always
+    // arrives on a later tick; making the simulator behave the same way removes a
+    // class of race that exists nowhere but here, and that was showing up as
+    // personas failing differently on every run.
+    setImmediate(() => {
+      if (this.dead) return;
+      this.utteranceCb?.(turn.say, confidence);
+    });
   }
 
   /**
