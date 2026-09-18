@@ -4,7 +4,8 @@ import { log } from "../log.js";
 import { spellOut } from "../voice/tts.js";
 import { streamSentences } from "../voice/llm.js";
 import { JourneyState } from "./journey-state.js";
-import { EscalationDetector, looksLikeDontKnow, redactDigits, ruleIntent, type SignalReading } from "./escalation.js";
+import type { Form } from "./fact-bus.js";
+import { EscalationDetector, angerPatternMatched, looksLikeDontKnow, redactDigits, ruleIntent, type SignalReading } from "./escalation.js";
 import { extract } from "./extract.js";
 import { normaliseBool, speakableValue } from "./normalise.js";
 import { submitFinal } from "../sandbox/submit.js";
@@ -138,7 +139,7 @@ export class DialogueEngine {
       // costs nothing, because it is already ulaw on disk.
       this.armFiller();
 
-      const [extraction] = await Promise.all([
+      const [extraction, readings] = await Promise.all([
         extract({
           journey: this.state.journey,
           form: this.state.form,
@@ -155,11 +156,21 @@ export class DialogueEngine {
           // A short yes/no to a closed question, or a yes to a read-back, is an
           // answer rather than a mood.
           closedAnswer:
-            (asking?.capture === "closed" || this.state.awaitingConfirm !== null) &&
+            (asking?.capture === "closed" || this.state.awaitingConfirm.length > 0) &&
             normaliseBool(text) !== null &&
             text.length < 40,
-        }).then((readings) => this.hooks.onSignals(readings)),
+        }).then((r) => {
+          this.hooks.onSignals(r);
+          return r;
+        }),
       ]);
+
+      // Now that extraction has landed, the detector can tell venting from
+      // answering and decide ANGER accordingly.
+      this.detector.resolveAnger(readings, {
+        producedAnswers: extraction.accepted.length > 0,
+        patternMatched: angerPatternMatched(text),
+      });
 
       this.clearFiller();
       if (this.detector.hasFired || this.finalised) return;
@@ -184,12 +195,16 @@ export class DialogueEngine {
         return this.callback(text);
       case "ask_human":
         return this.handoff("ASKS", text);
-      case "question":
-        // NO ADVICE lives on the OFF_SCRIPT path; the detector decides whether it
-        // was an advice question, so anything still here is answerable small talk.
-        this.hooks.onGuardrail("NO_ADVICE", "off-journey question deflected");
+      case "question": {
+        // The detector runs in parallel with extraction, so it never sees this
+        // intent - which is why OFF_SCRIPT could not fire from it, and the agent
+        // deflected an advice question without ever handing off. Tripped
+        // explicitly here, now that the intent is known.
+        this.hooks.onGuardrail("NO_ADVICE", "advice question deflected, handing to a human");
         await this.speak(scripts.no_advice);
+        this.detector.trip("OFF_SCRIPT", text);
         return;
+      }
       default:
         break;
     }
@@ -229,13 +244,14 @@ export class DialogueEngine {
     }
 
     // A pending read-back is answered before anything else is considered.
-    if (this.state.awaitingConfirm) {
-      const fieldId = this.state.awaitingConfirm;
+    if (this.state.awaitingConfirm.length) {
+      const pending = this.state.awaitingConfirm;
+      const fieldId = pending[0] as string;
       const said = normaliseBool(text);
-      this.state.awaitingConfirm = null;
+      this.state.awaitingConfirm = [];
 
       if (said === true) {
-        this.state.form.set(fieldId, { state: "confirmed" });
+        for (const id of pending) this.state.form.set(id, { state: "confirmed" });
         return this.askNext();
       }
 
@@ -255,11 +271,15 @@ export class DialogueEngine {
       }
 
       if (said === false) {
-        this.state.form.reject(fieldId);
+        // A "no" to a batch clears the whole batch. Which value was wrong is not
+        // knowable from "no", and keeping two of three would silently confirm
+        // something the customer just rejected.
+        for (const id of pending) this.state.form.reject(id);
         return this.askField(this.state.fieldById(fieldId), { reask: true });
       }
 
       // Neither a yes, a no, nor a value. Ask once more rather than guessing.
+      for (const id of pending) this.state.form.reject(id);
       return this.askField(this.state.fieldById(fieldId), { reask: true });
     }
 
@@ -272,8 +292,8 @@ export class DialogueEngine {
       });
     }
 
-    const needsConfirm = extraction.accepted.find((p) => p.needsConfirm);
-    if (needsConfirm) return this.confirm(needsConfirm.field);
+    const needsConfirm = extraction.accepted.filter((p) => p.needsConfirm).map((p) => p.field);
+    if (needsConfirm.length) return this.confirm(needsConfirm);
 
     if (!extraction.accepted.length && this.state.asking) {
       const asked = this.state.fieldById(this.state.asking);
@@ -354,29 +374,55 @@ export class DialogueEngine {
       return this.handoff("CONFUSION", `${field.id} asked ${attempts} times`);
     }
 
-    if (isPrefilled && !opts.reask) this.state.awaitingConfirm = field.id;
+    if (isPrefilled && !opts.reask) this.state.awaitingConfirm = [field.id];
 
     await this.speak(this.state.render(opts.reask ? field.script.reask : field.script.ask));
   }
 
-  private async confirm(fieldId: string): Promise<void> {
-    const field = this.state.fieldById(fieldId);
-    const value = this.state.form.get(fieldId)?.value;
-    if (!field?.script.confirm || value === null || value === undefined) {
-      this.state.form.set(fieldId, { state: "confirmed" });
+  /**
+   * Reads values back before they count as confirmed.
+   *
+   * Takes a list because a single turn can fill several fields. Three fields
+   * volunteered together get one "I have 42 Wattle Street, Parramatta, 2150. Is
+   * that right?" rather than three separate read-backs, which is both faster and
+   * what a person would actually do.
+   */
+  private async confirm(fieldIds: string[]): Promise<void> {
+    const pending = fieldIds.filter((id) => {
+      const field = this.state.fieldById(id);
+      const value = this.state.form.get(id)?.value;
+      return field?.script.confirm && value !== null && value !== undefined;
+    });
+
+    // Nothing worth reading back; accept and move on.
+    if (!pending.length) {
+      for (const id of fieldIds) this.state.form.set(id, { state: "confirmed" });
       return this.askNext();
     }
 
-    this.state.awaitingConfirm = fieldId;
-    // The stored value is normalised for the payload; the read-back is for a
-    // person, so it is spoken rather than printed.
-    const spoken = speakableValue(field, value);
-    await this.speak(
-      this.state.render(field.script.confirm, {
-        value: spoken,
-        value_spelled: field.confirm === "letters" ? spellOut(String(value)) : spoken,
+    this.state.awaitingConfirm = pending;
+
+    if (pending.length === 1) {
+      const id = pending[0] as string;
+      const field = this.state.fieldById(id) as JourneyField;
+      const value = this.state.form.get(id)?.value as NonNullable<ReturnType<Form["get"]>>["value"];
+      const spoken = speakableValue(field, value);
+      return this.speak(
+        this.state.render(field.script.confirm as string, {
+          value: spoken,
+          value_spelled: field.confirm === "letters" ? spellOut(String(value)) : spoken,
+        })
+      );
+    }
+
+    const values = pending
+      .map((id) => {
+        const field = this.state.fieldById(id) as JourneyField;
+        return speakableValue(field, this.state.form.get(id)?.value ?? null);
       })
-    );
+      .filter(Boolean);
+
+    return this.speak(`I have ${values.join(", ")}. Is that right?`);
   }
 
   private async review(): Promise<void> {

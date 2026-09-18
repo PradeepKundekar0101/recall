@@ -34,8 +34,15 @@ export class JourneyState {
 
   /** Field currently being asked. Drives the console and the CONFUSION counter. */
   asking: string | null = null;
-  /** Field awaiting a yes/no on its read-back. */
-  awaitingConfirm: string | null = null;
+  /**
+   * Fields awaiting a yes/no on their read-back.
+   *
+   * A list, not a single field, because a customer who says "42 Wattle Street,
+   * Parramatta, 2150" has answered three questions at once and should hear one
+   * confirmation rather than three - which is the difference the efficiency
+   * number is measuring.
+   */
+  awaitingConfirm: string[] = [];
   /** Agreed callback window, when the customer asked to be rung later. */
   callbackWindow: string | null = null;
 

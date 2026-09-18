@@ -132,7 +132,12 @@ async function main(): Promise<void> {
       const handsFree = engine.state.form.handsFree();
       const assertion = assertions[persona.id];
       const failure = assertion
-        ? assertion({ outcome, spoken: transport.spoken, transferredTo: transport.transferredTo })
+        ? assertion({
+            outcome,
+            spoken: transport.spoken,
+            transferredTo: transport.transferredTo,
+            form: engine.state.form.snapshot(),
+          })
         : outcome === null
           ? `no outcome reached (phase ${engine.state.phase})`
           : null;

@@ -1,5 +1,5 @@
 import type { Persona } from "../transports/sim.js";
-import type { CallOutcome } from "@recall/shared";
+import type { CallOutcome, FormState } from "@recall/shared";
 
 /**
  * What the harness actually checks for a persona.
@@ -12,6 +12,7 @@ export type PersonaAssertion = (ctx: {
   outcome: CallOutcome | null;
   spoken: string[];
   transferredTo: string | null;
+  form: FormState;
 }) => string | null;
 
 export const assertions: Record<string, PersonaAssertion> = {
@@ -48,6 +49,23 @@ export const assertions: Record<string, PersonaAssertion> = {
         : `expected handoff, got ${outcome}`,
 
   mumbler: ({ outcome }) => (outcome === "handoff" ? null : `expected handoff, got ${outcome}`),
+
+  /**
+   * Barge-in, not completion. This persona talks over every line, so it runs out
+   * of script long before the journey ends - which is the point. What must hold is
+   * that talking over the agent did not cost the customer their answer.
+   */
+  interrupter: ({ form }) => {
+    const name = form.full_name;
+    if (!name || (name.state !== "confirmed" && name.state !== "captured")) {
+      return `full_name was lost to barge-in (state ${name?.state ?? "missing"})`;
+    }
+    const holder = form.account_holder;
+    if (!holder || holder.state === "empty") {
+      return "account_holder was volunteered mid-interruption and lost";
+    }
+    return null;
+  },
 
   decliner: ({ outcome, spoken }) =>
     outcome !== "declined"

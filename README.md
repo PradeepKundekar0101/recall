@@ -49,7 +49,22 @@ Every vendor sits behind an env switch, so swapping one is a config change rathe
 | `CALL_MODE` | `echo`, `journey` | `echo` repeats back what STT heard. It is the infrastructure check. |
 | `TRANSPORT` | `sim`, `pstn` | `sim` runs the exact engine against scripted personas without dialling. |
 
-**OpenRouter works, with two caveats.**
+**OpenRouter works, and is too slow to demo on.**
+Measured with `pnpm llm:check`, warm, through the gateway:
+
+| Model | Extraction | First sentence |
+| --- | --- | --- |
+| `google/gemini-2.5-flash-lite` | 1110 ms | 1067 ms |
+| `openai/gpt-4o-mini` | 1686 ms | 3034 ms |
+| `anthropic/claude-haiku-4.5` | 2067 ms | 1426 ms |
+
+Cold and warm are near-identical, so this is not connection setup.
+Three architecturally different models clustering above a hard floor of ~1050 ms is the signature of fixed gateway overhead, and the whole turn budget is 800 ms.
+Get a direct Anthropic or OpenAI key for the demo; keep OpenRouter for trying models out.
+
+**Mitigations already in place**, which matter whichever provider you use: every scripted line is pre-rendered and spoken verbatim, so the model is off the speech path entirely and a turn costs one extraction call rather than two round trips; a short pre-rendered filler plays at 400 ms so the line is never silent; and closed yes/no answers skip the sentiment classifier, removing a model call from the commonest turn in the journey.
+
+**The older caveats still apply.**
 It is OpenAI-compatible, so it uses the same client with a different base URL; set `OPENROUTER_API_KEY` and `LLM_PROVIDER=openrouter`, and use org-prefixed model ids like `anthropic/claude-haiku-4.5`.
 The caveats are that it adds a network hop in front of the model, against a budget that only allows 250 ms to first token, and that `strict` tool calling is model-dependent behind the gateway - so it is sent without `strict` and the extractor's own validation holds the line instead.
 Run `pnpm llm:check` to measure both before committing to it for the demo.
@@ -138,7 +153,7 @@ The extractor's own score is multiplied by the STT word confidence over the evid
 ## Known gaps
 
 - **The confidence scale needs re-measuring on real phone audio.** The current baseline was measured on synthetic speech fed back through the encoder, which is not a mobile handset in a loud room. Run `pnpm voice:calibrate` once real call audio exists.
-- No LLM key is set, so extraction, the review gate and 7 of the 10 personas are still untested. Echo mode does not need one.
+- **OpenRouter adds roughly a second of fixed latency**, which the turn budget cannot absorb. See below.
 - `TEST_NUMBERS` currently holds an Indian number carried over from the old project. Replace it with the AU test numbers the organisers provide.
 - The Energy field list and scripts in `energy.journey.json` are placeholders, pending the recording.
 - The manual baseline for the efficiency counter is zero until it can be measured, rather than a number invented to make the comparison look good.
