@@ -1,0 +1,55 @@
+[
+  {
+    "id": "L-1042",
+    "first_name": "Priya",
+    "full_name": "Priya Sharma",
+    "phone": "REPLACED_AT_LOAD",
+    "email": "priya.sharma@example.com",
+    "last_completed_step": "contact",
+    "prefill": {
+      "full_name": "Priya Sharma",
+      "dob": "1989-03-07",
+      "account_holder": true,
+      "phone": "REPLACED_AT_LOAD",
+      "email": "priya.sharma@example.com"
+    },
+    "plan_id": "PLAN-EN-0331",
+    "plan_name": "econnex Saver 12",
+    "started_at": "on Tuesday"
+  },
+  {
+    "id": "L-1043",
+    "first_name": "Daniel",
+    "full_name": "Daniel Okafor",
+    "phone": "REPLACED_AT_LOAD",
+    "last_completed_step": "identity",
+    "prefill": {
+      "full_name": "Daniel Okafor",
+      "dob": "1976-11-22",
+      "account_holder": true
+    },
+    "plan_id": "PLAN-EN-0118",
+    "plan_name": "econnex Flex",
+    "started_at": "last Thursday"
+  },
+  {
+    "id": "L-1044",
+    "first_name": "Mei",
+    "full_name": "Mei Tan",
+    "phone": "REPLACED_AT_LOAD",
+    "last_completed_step": "supply",
+    "prefill": {
+      "full_name": "Mei Tan",
+      "dob": "1994-06-02",
+      "account_holder": true,
+      "email": "mei.tan@example.com",
+      "street": "42 Wattle Street",
+      "suburb": "Parramatta",
+      "state": "NSW",
+      "postcode": "2150"
+    },
+    "plan_id": "PLAN-EN-0331",
+    "plan_name": "econnex Saver 12",
+    "started_at": "this morning"
+  }
+]
