@@ -41,6 +41,9 @@ curl -s -X POST localhost:8080/calls -H 'content-type: application/json' -d '{"l
 
 The response says `simulated: true` if nothing was actually dialled.
 Trust that field rather than the 201.
+The console reaches the same endpoint in three steps: pick the customer, seed or clear each field and write the agent a brief, then Dial.
+The body may also carry `prefill` (a value seeds a field so it is confirmed in one line, `null` removes it so it is asked) and `agent_brief` (how the agent should talk; it shapes generated lines only, never the scripts).
+Both are parsed in `leads/setup.ts` and refused whole on any bad value, and neither can touch the number that is dialled.
 
 | Command | What it proves |
 | --- | --- |
@@ -49,6 +52,7 @@ Trust that field rather than the 201.
 | `pnpm llm:check` | Structured extraction and streaming, with warm latency medians |
 | `pnpm normalise:check` | Dates, digits, emails, enums, and how each value is read back. Milliseconds, no network |
 | `pnpm dialogue:check` | The engine's turn logic against a fake line: prefilled values confirmed rather than asked, the second attempt heard before CONFUSION fires, nudges held while the customer talks, a yes said over the previous line not confirming the next, two finals a breath apart asking once, a question that was talked over asked again, and a reply queued behind the filler rather than on top of it. No vendors |
+| `pnpm setup:check` | What the console sends before a dial: seeds and removals folded into the lead, bad fields and briefs refused whole, the dial target untouched, and the brief fenced inside the voice prompt. Milliseconds, no network |
 | `pnpm tts:check` | mulaw round-trip and loudness levelling. Milliseconds, no network |
 | `pnpm transport:check` | The Twilio transport against a fake Twilio and a fake media stream: dial, handshake, transfer, the hangup that must not follow it, the answering-machine verdict that must not end a live call, talking over the agent - a backchannel that must not stop the line, a turn-taker that must, and what was heard when it did - and two lines handed over at once, which must not overlap. Rings nothing |
 | `pnpm eval` | Ten simulator personas end to end |
@@ -169,6 +173,19 @@ The engine queues every line it speaks, fillers included, because it is what dec
 A filler that is no longer needed by the time the wire is free is dropped rather than played late, so serialising does not cost a turn the 400 ms it was meant to hide.
 `createEngine()` takes an injectable extractor, which is what lets `dialogue:check` slow extraction down enough for the filler to be due; `transport:check` drives two lines onto one wire directly.
 
+**Editing orchestrator source kills the call that is on the line.**
+`tsx watch` restarts on any file under `apps/orchestrator/src`, and a call lives entirely inside that process: transport, engine, silence timers, all of it.
+The restart is silent from the operator's chair.
+The row stays `live`, the console keeps showing `live`, the customer's next answer reaches nobody, and Twilio drops the leg a few seconds later when the media stream's peer disappears.
+Call `39ad03d0` died exactly this way on 19 Sep at 11:15 IST: the last thing on the record is the agent reading the date of birth back, the answer to it was never heard, and the row was still `live` half an hour later.
+Creating or deleting a scratch file in that tree counts, so do neither during a rehearsal call.
+Boot now closes any row left open as `disconnected` - after the port bind succeeds, so a second orchestrator that loses the bind cannot close the first one's calls.
+
+**A console with no event stream must not report a live call.**
+`useCallStream` has always known whether the stream is up, and the status stat ignored it, so a call the console could no longer see still read `live`.
+It says `no stream` now, once the stream has opened at least once and then dropped, and corrects itself on reconnect because the whole call replays.
+Not yet committed: it is interleaved with the console's setup-flow work.
+
 **Never run a transport check without the injected client.**
 The first draft of `transport:check` reached the real Twilio SDK and rang the test handset.
 The check now injects a fake client and sets fake credentials before anything is imported.
@@ -281,6 +298,10 @@ The other short calls in that session show no AMD hangup and no orchestrator upd
 
 - Real field list drops into `journey/energy.journey.json`; update `sandbox/mapping.ts`. Nothing else should need to change.
 - The recording gives script phrasing and the manual baseline for the efficiency counter, which is currently `manual_baseline_s: 0`.
+
+**Known limitations found while debugging**
+
+- `normalise` reads "1st sep 2002", "the 1st of September 2002" and "No it's 1st sep 2002" into `2002-09-01`, with a read-back, so correcting a date by voice works. It cannot read a year spelled out in words ("two thousand and two"), which returns `could not read a date` and costs an attempt.
 
 **Known flakiness**
 
