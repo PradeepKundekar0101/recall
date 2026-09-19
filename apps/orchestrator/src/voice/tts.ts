@@ -7,7 +7,13 @@ import { env, has } from "../env.js";
 import { log } from "../log.js";
 
 /**
- * ElevenLabs Flash v2.5 over the realtime websocket.
+ * ElevenLabs over the realtime websocket.
+ *
+ * The model is `TTS_MODEL`. It has to be one the configured voice is actually
+ * fine-tuned on: a professional voice clone rendered through a model whose
+ * fine-tune is missing or failed still produces audio, just flat and synthetic,
+ * and that is what the first journey call sounded like on Flash v2.5. A voice's
+ * per-model state is in `fine_tuning.state` on GET /v1/voices/{id}.
  *
  * `output_format=ulaw_8000` means the audio comes back in exactly the shape Twilio
  * wants, so the return path has no transcode either. ~75 ms model latency is the
@@ -23,15 +29,6 @@ import { log } from "../log.js";
 const here = dirname(fileURLToPath(import.meta.url));
 const cacheDir = resolve(here, "../..", env.prerenderDir);
 const memory = new Map<string, Buffer>();
-
-/**
- * Digits a customer reads back should be spoken as digits. Postcodes, NMIs and
- * phone numbers all land here, and all three are read back for confirmation, so
- * getting this wrong shows up as a failed confirmation rather than a cosmetic bug.
- */
-export function groupDigits(text: string): string {
-  return text.replace(/\b\d{2,}\b/g, (run) => run.split("").join(" "));
-}
 
 /** Spells a value out for the `letters` confirm mode: "p-r-i-y-a, dot, sharma". */
 export function spellOut(value: string): string {
@@ -50,8 +47,89 @@ export function spellOut(value: string): string {
     .replace(/, -/g, ", ");
 }
 
+/**
+ * Loudness levelling.
+ *
+ * ElevenLabs normalises each request on its own, so a two-word acknowledgement
+ * comes back hot and a long sentence comes back soft. Measured across the
+ * pre-rendered lines, "Okay." sat 10 dB above the consent line that follows it,
+ * which on a handset is a shout between sentences. Every finished utterance is
+ * brought to one RMS target here, with a ceiling on the peak so nothing clips.
+ *
+ * This is a gain stage on a complete buffer, not a resample: the audio stays
+ * 8 kHz mulaw end to end and the cost is one table lookup per sample.
+ */
+export const TARGET_RMS = 2000;
+const PEAK_CEILING = 28000;
+/** Below this the buffer is silence or mock audio and is left alone. */
+const MIN_RMS_TO_LEVEL = 50;
+
+const ULAW_TO_LINEAR = new Int16Array(256);
+for (let byte = 0; byte < 256; byte++) {
+  const inverted = ~byte & 0xff;
+  const exponent = (inverted >> 4) & 0x07;
+  const mantissa = inverted & 0x0f;
+  const magnitude = (((mantissa << 3) + 0x84) << exponent) - 0x84;
+  ULAW_TO_LINEAR[byte] = inverted & 0x80 ? -magnitude : magnitude;
+}
+
+export function ulawToLinear(ulaw: Buffer): Int16Array {
+  const out = new Int16Array(ulaw.length);
+  for (let i = 0; i < ulaw.length; i++) out[i] = ULAW_TO_LINEAR[ulaw[i] as number] as number;
+  return out;
+}
+
+export function linearToUlaw(sample: number): number {
+  const BIAS = 0x84;
+  const CLIP = 32635;
+  const sign = sample < 0 ? 0x80 : 0;
+  let magnitude = Math.abs(sample);
+  if (magnitude > CLIP) magnitude = CLIP;
+  magnitude += BIAS;
+  let exponent = 7;
+  for (let mask = 0x4000; (magnitude & mask) === 0 && exponent > 0; exponent--, mask >>= 1) {
+    /* find the segment */
+  }
+  const mantissa = (magnitude >> (exponent + 3)) & 0x0f;
+  return ~(sign | (exponent << 4) | mantissa) & 0xff;
+}
+
+export function rmsOf(ulaw: Buffer): number {
+  if (!ulaw.length) return 0;
+  let sum = 0;
+  for (let i = 0; i < ulaw.length; i++) {
+    const s = ULAW_TO_LINEAR[ulaw[i] as number] as number;
+    sum += s * s;
+  }
+  return Math.sqrt(sum / ulaw.length);
+}
+
+export function levelLoudness(ulaw: Buffer, targetRms = TARGET_RMS): Buffer {
+  const rms = rmsOf(ulaw);
+  if (rms < MIN_RMS_TO_LEVEL) return ulaw;
+
+  let peak = 0;
+  for (let i = 0; i < ulaw.length; i++) {
+    const s = Math.abs(ULAW_TO_LINEAR[ulaw[i] as number] as number);
+    if (s > peak) peak = s;
+  }
+  const gain = Math.min(targetRms / rms, peak ? PEAK_CEILING / peak : 1);
+  if (Math.abs(gain - 1) < 0.05) return ulaw;
+
+  const out = Buffer.alloc(ulaw.length);
+  for (let i = 0; i < ulaw.length; i++) {
+    out[i] = linearToUlaw(Math.round((ULAW_TO_LINEAR[ulaw[i] as number] as number) * gain));
+  }
+  return out;
+}
+
 function cacheKey(text: string): string {
-  return createHash("sha1").update(`${env.ttsModel}|${env.elevenLabsVoiceId}|${text}`).digest("hex").slice(0, 16);
+  // The target is part of the key, so a change to it re-renders rather than
+  // serving lines levelled to the old one.
+  return createHash("sha1")
+    .update(`${env.ttsModel}|${env.elevenLabsVoiceId}|rms${TARGET_RMS}|${text}`)
+    .digest("hex")
+    .slice(0, 16);
 }
 
 function cachePath(text: string): string {
@@ -78,7 +156,9 @@ export type SpeakOptions = {
  * feeds sentences in as the model produces them is `openTtsStream`.
  */
 export async function synthesize(opts: SpeakOptions): Promise<Buffer> {
-  const text = groupDigits(opts.text.trim());
+  // Spoken verbatim. How a value is worded - a date as a date, a postcode digit
+  // by digit - is decided where the value is known, in `speakableValue`.
+  const text = opts.text.trim();
   if (!text) return Buffer.alloc(0);
 
   if (opts.cacheable) {
@@ -100,7 +180,7 @@ export async function synthesize(opts: SpeakOptions): Promise<Buffer> {
   stream.push(text);
   await stream.end();
 
-  const audio = Buffer.concat(chunks);
+  const audio = levelLoudness(Buffer.concat(chunks));
   if (opts.cacheable && audio.length) {
     mkdirSync(cacheDir, { recursive: true });
     writeFileSync(cachePath(text), audio);
@@ -254,7 +334,7 @@ export async function openTtsStream(opts: {
  * demo will open instantly or pay for a synthesis on the first call.
  */
 export async function prerender(lines: string[]): Promise<{ cached: number; rendered: number }> {
-  const unique = [...new Set(lines.map((l) => groupDigits(l.trim())).filter(Boolean))];
+  const unique = [...new Set(lines.map((l) => l.trim()).filter(Boolean))];
   if (env.mockVoice || !has.tts()) {
     log.info(`tts: skipped pre-rendering ${unique.length} fixed lines (${env.mockVoice ? "MOCK_VOICE=1" : "no key"})`);
     return { cached: 0, rendered: 0 };
