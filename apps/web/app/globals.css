@@ -1974,3 +1974,80 @@ a.btn-primary { color: var(--on-primary); }
   }
   .timing-kind { grid-column: 2 / -1; }
 }
+
+/* ---------- first audio by kind of turn ----------
+   Under the stage bar, in the same card, because the split is what makes the
+   blended bar above it readable rather than a second subject. One ink-coloured
+   track per kind on a scale the rows share: the kinds are named in text, so
+   colour is carrying nothing here and a second palette would only compete with
+   the three stage colours right above. */
+
+.kinds {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline-soft);
+}
+.kinds-lede {
+  margin: 0 0 12px;
+  max-width: 62ch;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.kinds-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* The same column rhythm as .stages-key, so the two blocks in this card read as
+   one table rather than as two components that happened to land together. */
+.kinds-list li {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr) 7ch minmax(0, max-content);
+  gap: 10px;
+  align-items: center;
+  font-size: 13px;
+}
+.kinds-name {
+  color: var(--ink);
+  white-space: nowrap;
+}
+.kinds-track {
+  height: 8px;
+  border-radius: var(--pill);
+  background: var(--surface-strong);
+  overflow: hidden;
+}
+/* Ink rather than a semantic colour: this bar says how long, not how good. */
+.kinds-fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: var(--pill);
+  background: var(--primary);
+}
+.kinds-ms {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.kinds-n {
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  /* Same move .stages-key makes at this width: the name and its median hold the
+     line, and the count goes underneath rather than squeezing the track out. */
+  .kinds-list li {
+    grid-template-columns: minmax(0, 1fr) 7ch;
+    row-gap: 3px;
+  }
+  .kinds-track { grid-column: 1 / -1; grid-row: 2; }
+  .kinds-n { grid-column: 1 / -1; grid-row: 3; }
+}

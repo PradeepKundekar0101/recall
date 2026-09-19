@@ -7,6 +7,7 @@ import { Nav } from "../../components/Nav";
 import { StatTile } from "../../components/analytics/StatTile";
 import { Histogram } from "../../components/analytics/Histogram";
 import { StageBars } from "../../components/analytics/StageBars";
+import { KindSplit } from "../../components/analytics/KindSplit";
 import { TrendChart } from "../../components/analytics/TrendChart";
 import { OutcomeBar } from "../../components/analytics/OutcomeBar";
 import { FieldTable } from "../../components/analytics/FieldTable";
@@ -199,29 +200,35 @@ function Dashboard({ data }: { data: AnalyticsResponse }) {
           {p50 === null ? (
             <p className="empty">No measured turns yet.</p>
           ) : (
-            <StageBars
-              total={p50}
-              stages={[
-                {
-                  id: "think",
-                  label: "Think",
-                  p50: data.latency.stages.think?.p50 ?? null,
-                  hint: "transcript to reply decided",
-                },
-                {
-                  id: "wire",
-                  label: "Wire wait",
-                  p50: data.latency.stages.wire_wait?.p50 ?? null,
-                  hint: "previous line still playing",
-                },
-                {
-                  id: "tts",
-                  label: "TTS",
-                  p50: data.latency.stages.tts_ttfb?.p50 ?? null,
-                  hint: "text to first audio frame",
-                },
-              ]}
-            />
+            <>
+              <StageBars
+                total={p50}
+                stages={[
+                  {
+                    id: "think",
+                    label: "Think",
+                    p50: data.latency.stages.think?.p50 ?? null,
+                    hint: "transcript to reply decided",
+                  },
+                  {
+                    id: "wire",
+                    label: "Wire wait",
+                    p50: data.latency.stages.wire_wait?.p50 ?? null,
+                    hint: "previous line still playing",
+                  },
+                  {
+                    id: "tts",
+                    label: "TTS",
+                    p50: data.latency.stages.tts_ttfb?.p50 ?? null,
+                    hint: "text to first audio frame",
+                  },
+                ]}
+              />
+              {/* The bar above blends every kind of turn together, which is the
+                  one thing TurnKind exists to stop. Same card, because the split
+                  is a reading of the bar rather than a second subject. */}
+              <KindSplit byKind={data.latency.by_kind} />
+            </>
           )}
         </section>
       </div>
