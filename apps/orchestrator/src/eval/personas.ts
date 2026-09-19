@@ -16,12 +16,20 @@ export type PersonaAssertion = (ctx: {
 }) => string | null;
 
 export const assertions: Record<string, PersonaAssertion> = {
-  cooperative: ({ outcome, spoken }) =>
+  cooperative: ({ outcome, spoken, form }) =>
     outcome !== "submitted"
       ? `expected submitted, got ${outcome}`
       : spoken.filter((l) => /sorry, i didn'?t catch|could you give me that .* again/i.test(l)).length > 0
         ? "re-asked a field the customer answered cleanly"
-        : null,
+        : // The lead carries an old address and the persona corrects it. A value
+          // heard by voice has to be read back before it counts, however it
+          // arrived: the second real call wrote a garbled correction straight
+          // into the form with no read-back at all.
+          form.email?.value !== "priya.sharma@gmail.com"
+          ? `corrected email not captured: ${String(form.email?.value)}`
+          : !spoken.some((l) => /g-m-a-i-l|gmail/i.test(l) && /is that right/i.test(l))
+            ? "confirmed a corrected email without reading it back"
+            : null,
 
   "volunteers-early": ({ outcome, spoken }) =>
     outcome !== "submitted"
