@@ -248,14 +248,23 @@ function report(over: Partial<{ calls: CallLite[]; turns: TurnRow[]; fieldEvents
 }
 
 // ---- per-field accuracy
+//
+// Every `attempts` below mirrors what fact-bus.ts actually emits: it increments
+// the counter on entry into `asking`, so the first ask already carries 1, a
+// re-ask carries 2, and a state that is not `asking` carries whatever the last
+// ask left behind. There is no shape in which a real `asking` event carries 0.
+// Do not "simplify" these back to zero-based - fixtures that counted the first
+// ask as 0 are what let a first-try rate of 0% for every field ship.
 {
   const events: FieldEventRow[] = [
-    { call_id: "a", field: "email", state: "asking", confidence: null, attempts: 0 },
-    { call_id: "a", field: "email", state: "captured", confidence: 0.8, attempts: 0 },
+    // Asked, misheard, asked again, then confirmed. One re-ask, not a first try.
     { call_id: "a", field: "email", state: "asking", confidence: null, attempts: 1 },
-    { call_id: "a", field: "email", state: "confirmed", confidence: 0.9, attempts: 1 },
-    { call_id: "b", field: "street", state: "asking", confidence: null, attempts: 0 },
-    { call_id: "b", field: "street", state: "confirmed", confidence: 0.95, attempts: 0 },
+    { call_id: "a", field: "email", state: "captured", confidence: 0.8, attempts: 1 },
+    { call_id: "a", field: "email", state: "asking", confidence: null, attempts: 2 },
+    { call_id: "a", field: "email", state: "confirmed", confidence: 0.9, attempts: 2 },
+    // Asked once, confirmed. A first-try capture with nothing re-asked.
+    { call_id: "b", field: "street", state: "asking", confidence: null, attempts: 1 },
+    { call_id: "b", field: "street", state: "confirmed", confidence: 0.95, attempts: 1 },
   ];
   // buildAnalytics filters field events down to the calls in the window, so the
   // window has to actually contain "a" and "b" or every assertion below sees
@@ -263,8 +272,10 @@ function report(over: Partial<{ calls: CallLite[]; turns: TurnRow[]; fieldEvents
   const r = report({ calls: [call({ id: "a" }), call({ id: "b" })], fieldEvents: events });
   const email = r.fields.find((f) => f.id === "email");
   const street = r.fields.find((f) => f.id === "street");
-  check("a re-asked field records the re-ask", email?.re_asks === 1, String(email?.re_asks));
-  check("a field asked once is captured first try", street?.captured_first_try === 1, String(street?.captured_first_try));
+  check("a field asked twice records exactly one re-ask", email?.re_asks === 1, String(email?.re_asks));
+  check("a field asked twice is not a first-try capture", email?.captured_first_try === 0, String(email?.captured_first_try));
+  check("a field asked once and confirmed is a first-try capture", street?.captured_first_try === 1, String(street?.captured_first_try));
+  check("a field asked once is charged no re-ask", street?.re_asks === 0, String(street?.re_asks));
   check("mean confidence ignores the nulls", street?.mean_confidence === 0.95, String(street?.mean_confidence));
   check("fields are sorted worst first", r.fields[0]?.id === "email", String(r.fields[0]?.id));
 }
@@ -277,10 +288,11 @@ function report(over: Partial<{ calls: CallLite[]; turns: TurnRow[]; fieldEvents
 // flattered the headline number with fields the agent never won.)
 {
   const events: FieldEventRow[] = [
+    // Never entered `asking`, so the counter never moved off zero.
     { call_id: "a", field: "plan_id", state: "prefilled", confidence: null, attempts: 0 },
     { call_id: "a", field: "plan_id", state: "confirmed", confidence: 0.99, attempts: 0 },
     // Asked, then the call dropped before it was ever confirmed or submitted.
-    { call_id: "b", field: "postcode", state: "asking", confidence: null, attempts: 0 },
+    { call_id: "b", field: "postcode", state: "asking", confidence: null, attempts: 1 },
   ];
   const r = report({ calls: [call({ id: "a" }), call({ id: "b" })], fieldEvents: events });
   check(
@@ -306,8 +318,8 @@ function report(over: Partial<{ calls: CallLite[]; turns: TurnRow[]; fieldEvents
     { call_id: "a", field: "plan_name", state: "prefilled", confidence: null, attempts: 0 },
     { call_id: "a", field: "plan_name", state: "confirmed", confidence: 0.5, attempts: 0 },
     // Call "b": genuinely asked and confirmed. Included in `asked`.
-    { call_id: "b", field: "plan_name", state: "asking", confidence: null, attempts: 0 },
-    { call_id: "b", field: "plan_name", state: "confirmed", confidence: 0.9, attempts: 0 },
+    { call_id: "b", field: "plan_name", state: "asking", confidence: null, attempts: 1 },
+    { call_id: "b", field: "plan_name", state: "confirmed", confidence: 0.9, attempts: 1 },
   ];
   const r = report({ calls: [call({ id: "a" }), call({ id: "b" })], fieldEvents: events });
   const planName = r.fields.find((f) => f.id === "plan_name");
@@ -317,8 +329,8 @@ function report(over: Partial<{ calls: CallLite[]; turns: TurnRow[]; fieldEvents
 // ---- a redacted field is asked but never a capture, and is still tallied redacted
 {
   const events: FieldEventRow[] = [
-    { call_id: "a", field: "card_number", state: "asking", confidence: null, attempts: 0 },
-    { call_id: "a", field: "card_number", state: "redacted", confidence: null, attempts: 0 },
+    { call_id: "a", field: "card_number", state: "asking", confidence: null, attempts: 1 },
+    { call_id: "a", field: "card_number", state: "redacted", confidence: null, attempts: 1 },
   ];
   const r = report({ calls: [call({ id: "a" })], fieldEvents: events });
   const card = r.fields.find((f) => f.id === "card_number");

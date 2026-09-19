@@ -138,8 +138,14 @@ function fieldStats(events: AnalyticsInput["fieldEvents"]): FieldStat[] {
       byField.get(seen.field) ??
       ({ id: seen.field, asked: 0, captured_first_try: 0, re_asks: 0, mean_confidence: null, redacted: 0 } as FieldStat);
     stat.asked += 1;
-    if (seen.reachedCaptureEnd && seen.attempts === 0) stat.captured_first_try += 1;
-    stat.re_asks += seen.attempts;
+    // `attempts` counts entries into `asking`, not re-asks: fact-bus.ts
+    // increments it on the way in, so the very first ask already arrives as 1.
+    // A first-try capture is therefore one ask and no more, and the re-asks are
+    // whatever was asked beyond that original. Reading `attempts` as a re-ask
+    // count put every field's first-try rate at 0% and charged a flawless call
+    // one re-ask per field.
+    if (seen.reachedCaptureEnd && seen.attempts <= 1) stat.captured_first_try += 1;
+    stat.re_asks += Math.max(0, seen.attempts - 1);
     if (seen.redacted) stat.redacted += 1;
     byField.set(seen.field, stat);
 
