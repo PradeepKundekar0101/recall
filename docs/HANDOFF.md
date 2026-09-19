@@ -627,6 +627,33 @@ It decodes ulaw to PCM and plays through Web Audio, scheduled against the audio 
 
 The tap is in `sendFrames`, which every route to Twilio goes through - a line synthesised just now, a fixed line served from the pre-render cache, a sentence of a streamed reply - so there is no second write path to remember.
 
+## Two things on the console
+
+**The guardrails are readable from the setup screen.**
+A **Guardrails** button sits in the Agent brief card head - which is the one place on that screen where the operator writes free text for the agent, and therefore where "what can it *not* be told to do?" gets asked.
+It opens a sheet listing all six, each with what it refuses, where it is enforced, and its live configuration.
+
+The content is served from `GET /guardrails`, not written into the console, and that is the whole point of it.
+A guardrail list typed into a React component is marketing copy: it goes on promising an allowlist long after somebody empties the allowlist.
+`guardrails.ts` builds the report from the same `env` and `policy` that `canDial()` reads, so the sheet and the next call cannot disagree.
+It also carries a `relaxed` line per guardrail, so a rule that is currently weakened says so on the same screen that claims it exists - an empty `TEST_NUMBERS`, a missing `HANDOFF_NUMBER`, `IGNORE_CALL_WINDOW=1`.
+Worth opening once before a demo for that reason alone: the first time it was pointed at a running orchestrator it reported, correctly, that it was 23:01 in Sydney and the calling window was not being enforced.
+
+The numbering is the one the source comments already use - "Guardrail 1: test data only" in the dial path, "Guardrail 3" on the digit runs, "Guardrail 6" on the opt-out - and it is sent by the orchestrator rather than taken from array position, so reordering the list cannot silently renumber them.
+
+Dismissal is the native `<dialog>` behaviour plus an explicit Escape handler.
+The native close request is real and correct in a browser somebody is typing in; it is also the one part of this that could not be exercised in automation, where an injected Escape reaches the document without producing a trusted close request. Relying on it alone would have meant shipping the dismissal untested.
+
+**The Journey pane follows the call.**
+Seventeen fields over six sections do not fit the pane, so from the third section on, the part of the form the agent was actually working on was below the fold: the one screen meant to show a call filling itself in was showing the top of a form nobody was looking at.
+The field being asked now is marked in ink and the pane scrolls to keep it centred.
+
+Two details that are easy to get wrong here.
+The scroll is done by hand on `.pane-body` rather than with `scrollIntoView`, which walks *every* scrollable ancestor - on a short window the outer column is scrollable too, so it would yank the whole board, header and transcript included, on every field change.
+And `prefers-reduced-motion` is honoured in JavaScript rather than with `scroll-behavior` in CSS, because a `scrollTo` that asks for `behavior: "smooth"` explicitly overrides the stylesheet: the media query would have looked like it was doing something and done nothing.
+
+A finished call does not follow anything, so reading back over one leaves the scrollbar where the operator put it.
+
 ## The three-minute cut
 
 The organiser confirmed there will be no sandbox and no mocked API from their side, and the demo slot is three minutes.
@@ -706,6 +733,8 @@ It is the answer to "is it actually saving" being asked from the back of a room,
 - Is anything escalated that should not be. Read the reason on the banner rather than trusting it: this is the second time a signal has fired on a customer who was answering correctly. If it is wrong, press **Cancel - keep the agent on** in the banner and the call carries on from the same question.
 - Provoke that cancel once on purpose. Ask for a person, let the bridging line start, then cancel - the agent should apologise, ask its question again, and the board should go back to `live`. Leave it too long and it will tell you the colleague's phone is already ringing, which is the honest answer.
 - Does the agent go quiet on answers that sounded fine. That is the answer gate's confidence floor, and `ANSWER_MIN_CONF` is the number to lower - the default is stricter than this account's own measurements justify.
+- Open **Guardrails** from the Agent brief card once before dialling, and read the amber lines. They are the live configuration, so that is where an empty allowlist or an unenforced calling window will admit itself.
+- Does the Journey pane follow the call down the form as the sections go by, rather than sitting at the top showing Identity.
 - Turn the **Monitor** toggle on at the top of the transcript pane and confirm the agent's voice comes out of the laptop. It is the cheapest way to tell a bad line from a bad render, and it needs no second handset.
 - Confirm `first committed words:` appears once in the orchestrator log, and that the `logprob` values in it vary. The confidence clause of the answer gate is built on that field; if it is absent or always the same, drop the clause rather than trusting it.
 - Do the prefilled fields land as one yes per run: name and date of birth together, then the account holder and the number as their own questions.
@@ -765,6 +794,7 @@ apps/orchestrator/src/
   transports/twilio.ts          media stream, per-sentence marks, barge-in (takesTurn), transfer
   monitor.ts                    the agent's own audio, on a local websocket and optionally at ffplay
   calls.ts                      wires transport + engine to the SSE bus
+guardrails.ts                   the six, described live from env and policy for the console
 apps/web/app/                   / operator console, /handoff human console
 packages/shared/                the SSE event union both apps compile against
 ```

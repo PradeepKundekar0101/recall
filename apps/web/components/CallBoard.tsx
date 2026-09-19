@@ -170,6 +170,9 @@ export function CallBoard({ callId, journey }: { callId: string; journey: Journe
               onSelect={setSelectedField}
               selected={selectedField}
               activeSection={over ? null : call.section}
+              // A finished call does not follow anything: the operator reading
+              // back over it should land where they left the scrollbar.
+              askingField={over ? null : call.askingField}
             />
           </div>
         </section>

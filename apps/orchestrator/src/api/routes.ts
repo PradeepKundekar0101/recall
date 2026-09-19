@@ -7,6 +7,7 @@ import { loadJourney, requiredFields } from "../journey/index.js";
 import { loadLeads, leadById } from "../leads/index.js";
 import { applySetup, parseSetup } from "../leads/setup.js";
 import { addToDnc, canDial, dncList, optOutList, onDncRegister } from "../policy.js";
+import { guardrailReport } from "../guardrails.js";
 import { liveTwilioTransports, escapeXml } from "../transports/twilio.js";
 import { latencyMedian } from "../voice/llm.js";
 import { startCall, getCall } from "../calls.js";
@@ -77,6 +78,18 @@ api.post("/dnc", (req, res) => {
   addToDnc(phone);
   log.warn(`added ${phone} to the DNC register`);
   res.json({ ok: true, dnc: dncList() });
+});
+
+/**
+ * The guardrails, as the process enforcing them describes itself.
+ *
+ * Read by the console's guardrail dialog. Built live from `env` and `policy`
+ * rather than written down in the browser, so an operator showing the room
+ * "nothing outside this allowlist can be dialled" is showing them the actual
+ * allowlist this process will check.
+ */
+api.get("/guardrails", (_req, res) => {
+  res.json(guardrailReport());
 });
 
 api.get("/policy", (_req, res) => {

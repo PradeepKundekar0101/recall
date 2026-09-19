@@ -86,6 +86,51 @@ export type GuardrailId =
   | "DNC"
   | "RESPECT_NO";
 
+/**
+ * One guardrail as the console explains it, built by the process enforcing it.
+ *
+ * Served rather than written into the console, and that is the whole point. A
+ * list of promises typed into a React component is marketing copy: it keeps
+ * saying "we never dial a number that is not on the allowlist" long after
+ * somebody empties the allowlist. This is assembled by the orchestrator from
+ * the same `env` and `policy` the dial path reads, so what the operator is
+ * shown and what the call will actually do cannot drift apart.
+ */
+export type GuardrailCard = {
+  id: GuardrailId;
+  /**
+   * 1 to 6, and the same numbering the source comments already use - "Guardrail
+   * 1: test data only" in the dial path, "Guardrail 3" on the digit runs,
+   * "Guardrail 6" on the opt-out. Sent rather than taken from array position so
+   * that reordering the list cannot silently renumber them.
+   */
+  number: number;
+  title: string;
+  /** What it refuses, in one sentence. */
+  rule: string;
+  /** Where it is enforced, named concretely enough to go and read. */
+  enforced_at: string[];
+  /** Live configuration, as the running process holds it right now. */
+  facts: { label: string; value: string }[];
+  /**
+   * Set when the running configuration weakens this guardrail.
+   *
+   * A guardrail that is switched off should say so on the same screen that
+   * claims it exists, rather than being quietly absent.
+   */
+  relaxed: string | null;
+};
+
+/** The whole guardrail surface, as `GET /guardrails` answers it. */
+export type GuardrailReport = {
+  guardrails: GuardrailCard[];
+  /**
+   * The calling window is checked in the same dial path but is not one of the
+   * six, so it travels beside them rather than being dressed up as one.
+   */
+  call_window: { label: string; value: string; relaxed: string | null };
+};
+
 /** What the extractor decides the customer's turn was. */
 export type Intent =
   | "answer"
