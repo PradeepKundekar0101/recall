@@ -13,7 +13,9 @@ export function FieldTable({ fields }: { fields: FieldStat[] }) {
     // Five columns do not fit a phone. The table scrolls inside its own card
     // rather than pushing the whole console sideways, which is what a table this
     // wide does when it is left to overflow.
-    <div className="field-table-wrap">
+    // tabIndex and a named region because a scroll container that only a mouse
+    // can scroll puts the last two columns out of a keyboard user's reach.
+    <div className="field-table-wrap" role="region" aria-label="Field capture, scrollable" tabIndex={0}>
       <table className="field-table" aria-label="Field capture, worst first">
         <thead>
           <tr>

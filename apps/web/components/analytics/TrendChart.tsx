@@ -1,13 +1,13 @@
 import type { TrendPoint } from "@recall/shared";
 
 const WIDTH = 640;
-const HEIGHT = 182;
+const HEIGHT = 186;
 const PAD = { left: 40, right: 12, top: 14 };
 const PLOT_WIDTH = WIDTH - PAD.left - PAD.right;
 const PLOT_HEIGHT = 112;
 const BASE_Y = PAD.top + PLOT_HEIGHT;
 /** The volume band sits under the axis rule, with its own baseline. */
-const VOLUME_TOP = BASE_Y + 12;
+const VOLUME_TOP = BASE_Y + 16;
 const VOLUME_HEIGHT = 26;
 const VOLUME_BASE = VOLUME_TOP + VOLUME_HEIGHT;
 const MAX_BAR = 24;
@@ -59,7 +59,7 @@ export function TrendChart({ points, budgetMs }: { points: TrendPoint[]; budgetM
       {runs(points).map((run) => (
         <path
           key={run[0]?.day}
-          d={run.map((step, n) => `${n === 0 ? "M" : "L"}${x(step.index)},${y(step.ms)}`).join(" ")}
+          d={run.map((at, n) => `${n === 0 ? "M" : "L"}${x(at.index)},${y(at.ms)}`).join(" ")}
           fill="none"
           stroke="var(--info-line)"
           strokeWidth="2"
@@ -83,7 +83,7 @@ export function TrendChart({ points, budgetMs }: { points: TrendPoint[]; budgetM
             strokeWidth="2"
             role="img"
           >
-            <title>{`${day(point.day)}: ${point.first_audio_p50}ms median, ${point.calls} ${point.calls === 1 ? "call" : "calls"}, ${point.submitted} submitted`}</title>
+            <title>{`${day(point.day)}: ${point.first_audio_p50}ms median`}</title>
           </circle>
         ) : null,
       )}
@@ -109,6 +109,9 @@ export function TrendChart({ points, budgetMs }: { points: TrendPoint[]; budgetM
         0
       </text>
 
+      {/* The band is the only place a day's call count is drawn, and on a day with
+          no measured turn it is the only mark at all - there is no dot to carry
+          the number instead. So the bars are reachable, not decoration. */}
       {points.map((point, i) => {
         const height = (point.calls / maxCalls) * VOLUME_HEIGHT;
         if (height <= 0) return null;
@@ -120,12 +123,16 @@ export function TrendChart({ points, budgetMs }: { points: TrendPoint[]; budgetM
             width={barWidth}
             height={height}
             fill="var(--hairline-strong)"
-            aria-hidden="true"
-          />
+            role="img"
+          >
+            <title>{`${day(point.day)}: ${point.calls} ${point.calls === 1 ? "call" : "calls"}, ${point.submitted} submitted`}</title>
+          </rect>
         );
       })}
-      <text x={4} y={VOLUME_BASE} className="chart-axis" fill="var(--muted)" aria-hidden="true">
-        calls
+      {/* Above the band, not in the gutter beside it: the end bars are centred on
+          the plot edges, so they overhang into the gutter at both ends. */}
+      <text x={PAD.left} y={VOLUME_TOP - 4} className="chart-axis" fill="var(--muted)" aria-hidden="true">
+        Calls a day, peak {maxCalls}
       </text>
 
       <text x={PAD.left} y={HEIGHT - 6} className="chart-axis" fill="var(--muted)" aria-hidden="true">

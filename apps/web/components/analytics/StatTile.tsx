@@ -19,16 +19,20 @@ export function StatTile({
   /** 0..1 against the threshold named in `sub`. Omitted when there is nothing to compare to. */
   meter?: number | null;
 }) {
+  // Number.isFinite, not typeof: a rate computed from a zero denominator arrives
+  // as NaN, which is a number and yields width: NaN%.
+  const ratio = typeof meter === "number" && Number.isFinite(meter) ? Math.min(Math.max(meter, 0), 1) : null;
+
   return (
     <div className={`tile tile-${tone}`}>
       <span className="tile-label">{label}</span>
       <span className="tile-value">{value}</span>
       {sub && <span className="tile-sub">{sub}</span>}
-      {typeof meter === "number" && (
+      {ratio !== null && (
         // The meter re-states the ratio that `sub` already spells out in words, so
         // it is hidden rather than read out twice.
         <span className="tile-meter" aria-hidden="true">
-          <span className="tile-meter-fill" style={{ width: `${Math.min(Math.max(meter, 0), 1) * 100}%` }} />
+          <span className="tile-meter-fill" style={{ width: `${ratio * 100}%` }} />
         </span>
       )}
     </div>

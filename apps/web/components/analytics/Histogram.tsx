@@ -1,3 +1,6 @@
+"use client";
+
+import { useId } from "react";
 import type { AnalyticsResponse } from "@recall/shared";
 
 type Bucket = AnalyticsResponse["latency"]["histogram"][number];
@@ -22,12 +25,19 @@ export function Histogram({ buckets, budgetMs }: { buckets: Bucket[]; budgetMs: 
 
   const max = Math.max(1, ...buckets.map((b) => b.count));
   const band = PLOT_WIDTH / buckets.length;
-  const barWidth = Math.min(band - 2, MAX_BAR);
+  // Floored: enough buckets and `band - 2` goes negative, which drops every column.
+  const barWidth = Math.max(1, Math.min(band - 2, MAX_BAR));
   const ruleX = budgetX(buckets, budgetMs, band);
+  const captionId = useId();
 
   return (
+    // aria-describedby, so the caveat under the chart reaches a screen reader
+    // with the chart rather than as a loose paragraph after it.
     <figure className="chart-figure">
-      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="chart" role="group" aria-label="Time to reply, every measured turn">
+      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="chart"
+        role="group"
+        aria-label="Time to reply, every measured turn"
+        aria-describedby={captionId}>
         <line
           x1={PAD.left}
           y1={PAD.top}
@@ -95,7 +105,9 @@ export function Histogram({ buckets, budgetMs }: { buckets: Bucket[]; budgetMs: 
           0
         </text>
 
-        {/* Every other edge, because nine of them under a 640px chart collide. */}
+        {/* Every other edge, because nine of them under a 640px chart collide. Each
+            is centred on the boundary it names, including the last: these are the
+            edges between bands, not captions under the columns. */}
         {buckets.map((bucket, i) => {
           if (i % 2 !== 0) return null;
           const last = i === buckets.length - 1;
@@ -104,8 +116,6 @@ export function Histogram({ buckets, budgetMs }: { buckets: Bucket[]; budgetMs: 
               key={bucket.from_ms}
               x={PAD.left + band * i}
               y={HEIGHT - 14}
-              // Centred on the edge it names, including the last: these are the
-              // boundaries between bands, not captions under the columns.
               textAnchor={i === 0 ? "start" : "middle"}
               className="chart-axis"
               fill="var(--muted)"
@@ -117,7 +127,7 @@ export function Histogram({ buckets, budgetMs }: { buckets: Bucket[]; budgetMs: 
           );
         })}
       </svg>
-      <figcaption className="chart-caption">
+      <figcaption className="chart-caption" id={captionId}>
         Measured from the customer&apos;s committed transcript to the first audio of the agent&apos;s reply. A short
         filler line can play before that, so this is not how long the line was silent.
       </figcaption>
