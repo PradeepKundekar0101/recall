@@ -14,12 +14,19 @@
   --rule: #24314a;
   --rule-soft: #1d2740;
 
+  /* The ink ramp is sized for a projector rather than a monitor. Every step
+     clears WCAG AA against --panel-2, the lightest surface any of it sits on:
+     measured 12.9 / 6.8 / 4.7. The previous ramp bottomed out at 2.7, which is
+     where every 11px label lived, and low contrast is the first thing a
+     projector washes out. */
   --ink: #e6edf7;
-  --ink-dim: #8296b4;
-  --ink-faint: #56698a;
+  --ink-dim: #98afd2;
+  --ink-faint: #7690bd;
 
   /* Field states. Fixed by the brief; everything else defers to them. */
-  --st-empty: #5a6b85;
+  /* Empty is the one state that is an absence, so it stays the quietest of the
+     seven - but it still has to clear 3:1 as a border to be seen at all. */
+  --st-empty: #687c9a;
   --st-prefilled: #4c8dff;
   --st-asking: #f0a93b;
   --st-captured: #f0a93b;
@@ -167,11 +174,39 @@ html, body {
 .bar-btn-go { border-color: var(--live); color: var(--live); }
 .bar-btn:focus-visible { outline: 2px solid var(--st-prefilled); outline-offset: 1px; }
 .stat-value { font-size: 15px; font-variant-numeric: tabular-nums; }
+/* Past a second the call stops feeling like a conversation, so the number that
+   says so turns red. */
+.stat-over { color: var(--alarm); }
+
+/* The lead picker is pre-call chrome - nobody changes lead mid-call - so it
+   reads as a control rather than as another piece of telemetry. */
+.bar-select {
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  font: inherit;
+}
+.bar-select:hover { border-color: var(--ink-faint); }
+.bar-select:focus-visible { outline: 2px solid var(--st-prefilled); outline-offset: 1px; }
+
+/* A refused dial is the one message the operator cannot be allowed to miss. */
+.notice {
+  padding: 8px 16px;
+  background: rgba(255, 92, 92, 0.1);
+  color: var(--alarm);
+  border-bottom: 1px solid var(--rule);
+}
 
 /* The TEST RUN banner is a guardrail made visible, so it is the one piece of
    chrome allowed to shout. Diagonal hazard stripes, not a coloured pill. */
+/* Bound by the same no-wrap rule as the rest of the bar. At the 1440 target it
+   was breaking "TEST RUN . <number>" over three lines, which pushed the bar
+   11px taller and left the one piece of chrome allowed to shout looking broken. */
 .testrun {
-  padding: 5px 12px;
+  white-space: nowrap;
+  padding: 5px 10px;
   border: 1px solid var(--warn);
   border-radius: var(--radius);
   color: var(--warn);
@@ -247,8 +282,12 @@ html, body {
 .field:focus-visible { outline: 2px solid var(--st-prefilled); outline-offset: 1px; }
 
 .field-label { font-family: var(--font-cond), sans-serif; text-transform: uppercase; letter-spacing: 0.06em; font-size: 10px; color: var(--ink-faint); }
-.field-value { font-size: 13px; color: var(--ink); word-break: break-word; text-align: right; }
-.field-value:empty::before { content: "—"; color: var(--st-empty); }
+/* The value sits immediately after its label instead of against the far edge of
+   the row. Right-aligned, a name rendered 362px from the label it belongs to,
+   which is a long association to carry across a projected panel. The fixed
+   label column still gives every value a common left edge to scan down. */
+.field-value { font-size: 13px; color: var(--ink); word-break: break-word; text-align: left; padding-right: 10px; }
+.field-value:empty::before { content: "-"; color: var(--st-empty); }
 /* The confidence figure is called out loud during the demo, so it has to be
    legible off a projector rather than tucked away as metadata. */
 .field-conf { font-size: 11px; color: var(--ink-dim); font-variant-numeric: tabular-nums; min-width: 4ch; text-align: right; }
@@ -282,7 +321,9 @@ html, body {
 
 .lane {
   position: relative;
-  height: 5px;
+  /* The escalation lanes are the signature panel, and at 5px they carried less
+     weight on screen than the rules drawn between sections. */
+  height: 8px;
   background: #1f2a40;
   border: 1px solid var(--rule);
   border-radius: 3px;
@@ -324,6 +365,10 @@ html, body {
   color: var(--alarm);
   background: rgba(255, 92, 92, 0.08);
 }
+.handoff-banner .label { color: inherit; }
+.banner-evidence { margin-top: 4px; }
+.script-pos-head { margin-top: 20px; }
+.script-pos { color: var(--ink-dim); }
 
 /* ---------- payload drawer ---------- */
 
@@ -373,6 +418,23 @@ html, body {
   margin-bottom: 22px;
 }
 .handoff-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+
+.handoff-title { margin: 4px 0 20px; }
+.handoff-reason .label { color: inherit; }
+.handoff-evidence { font-size: 15px; margin-top: 6px; }
+.handoff-elapsed { margin-top: 8px; }
+
+/* Before a transfer fires this screen has nothing to show, which is the normal
+   case - it sits open on a second laptop, waiting. Framed so it reads as ready
+   rather than as a page that failed to load. */
+.handoff-idle {
+  border: 1px dashed var(--rule);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  max-width: 60ch;
+  color: var(--ink-dim);
+}
+.handoff-idle code { color: var(--ink); }
 
 .empty {
   color: var(--ink-faint);

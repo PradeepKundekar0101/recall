@@ -1,4 +1,13 @@
-import { normalise, normaliseBool, normaliseDate, normaliseEmail, normalisePhone, normalisePostcode, stateFromPostcode } from "./normalise.js";
+import {
+  normalise,
+  normaliseBool,
+  normaliseDate,
+  normaliseEmail,
+  normalisePhone,
+  normalisePostcode,
+  speakableValue,
+  stateFromPostcode,
+} from "./normalise.js";
 import { loadJourney, fieldById } from "../journey/index.js";
 
 /**
@@ -36,6 +45,11 @@ const EMAILS: Case[] = [
   { input: "p-r-i-y-a dot sharma at gmail dot com", expect: "priya.sharma@gmail.com" },
   { input: "priya dot sharma at gmail dot com", expect: "priya.sharma@gmail.com" },
   { input: "priya.sharma@gmail.com", expect: "priya.sharma@gmail.com" },
+  // A correction to a read-back arrives with its preamble attached. The second
+  // real call confirmed "it'sthehealthcare101@gmail.com" from exactly this.
+  { input: "Uh, no, it's the healthcare101@gmail.com.", expect: "healthcare101@gmail.com" },
+  { input: "no it's priya dot sharma at gmail dot com", expect: "priya.sharma@gmail.com" },
+  { input: "My email is p-r-i-y-a dot sharma at gmail dot com.", expect: "priya.sharma@gmail.com" },
   { input: "just some words", expect: null },
 ];
 
@@ -103,6 +117,28 @@ for (const c of ENUMS) {
 // customer finds strange after they have already given the postcode.
 for (const [postcode, want] of [["2150", "NSW"], ["3000", "VIC"], ["4000", "QLD"], ["6000", "WA"], ["2600", "ACT"], ["0800", "NT"]] as const) {
   check("state", postcode, stateFromPostcode(postcode), want);
+}
+
+// How a stored value is said out loud. Digits are spaced so the voice reads
+// "two one five zero" rather than "two thousand one hundred and fifty", but a
+// year inside a date is a year: spacing every digit run at the TTS layer turned
+// the read-back into "7th of March, 1 9 8 9".
+const SPOKEN: { field: string; value: string; expect: string }[] = [
+  { field: "dob", value: "1989-03-07", expect: "7th of March, 1989" },
+  { field: "postcode", value: "2150", expect: "2 1 5 0" },
+  { field: "phone", value: "+61412345678", expect: "0 4 1 2 3 4 5 6 7 8" },
+  { field: "nmi", value: "6001234567", expect: "6 0 0 1 2 3 4 5 6 7" },
+  { field: "connection_type", value: "move_in", expect: "move in" },
+  { field: "full_name", value: "Priya Sharma", expect: "Priya Sharma" },
+];
+for (const c of SPOKEN) {
+  const field = fieldById(journey, c.field);
+  if (!field) {
+    console.log(`FAIL spoken     unknown field ${c.field}`);
+    failures++;
+    continue;
+  }
+  check("spoken", c.value, speakableValue(field, c.value), c.expect);
 }
 
 console.log(failures ? `\n${failures} failure(s).` : "\nAll normalisers pass.");

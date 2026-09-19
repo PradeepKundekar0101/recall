@@ -1,5 +1,5 @@
 import type { Persona } from "../transports/sim.js";
-import type { CallOutcome } from "@recall/shared";
+import type { CallOutcome, FormState } from "@recall/shared";
 
 /**
  * What the harness actually checks for a persona.
@@ -12,15 +12,24 @@ export type PersonaAssertion = (ctx: {
   outcome: CallOutcome | null;
   spoken: string[];
   transferredTo: string | null;
+  form: FormState;
 }) => string | null;
 
 export const assertions: Record<string, PersonaAssertion> = {
-  cooperative: ({ outcome, spoken }) =>
+  cooperative: ({ outcome, spoken, form }) =>
     outcome !== "submitted"
       ? `expected submitted, got ${outcome}`
       : spoken.filter((l) => /sorry, i didn'?t catch|could you give me that .* again/i.test(l)).length > 0
         ? "re-asked a field the customer answered cleanly"
-        : null,
+        : // The lead carries an old address and the persona corrects it. A value
+          // heard by voice has to be read back before it counts, however it
+          // arrived: the second real call wrote a garbled correction straight
+          // into the form with no read-back at all.
+          form.email?.value !== "priya.sharma@gmail.com"
+          ? `corrected email not captured: ${String(form.email?.value)}`
+          : !spoken.some((l) => /g-m-a-i-l|gmail/i.test(l) && /is that right/i.test(l))
+            ? "confirmed a corrected email without reading it back"
+            : null,
 
   "volunteers-early": ({ outcome, spoken }) =>
     outcome !== "submitted"
@@ -48,6 +57,23 @@ export const assertions: Record<string, PersonaAssertion> = {
         : `expected handoff, got ${outcome}`,
 
   mumbler: ({ outcome }) => (outcome === "handoff" ? null : `expected handoff, got ${outcome}`),
+
+  /**
+   * Barge-in, not completion. This persona talks over every line, so it runs out
+   * of script long before the journey ends - which is the point. What must hold is
+   * that talking over the agent did not cost the customer their answer.
+   */
+  interrupter: ({ form }) => {
+    const name = form.full_name;
+    if (!name || (name.state !== "confirmed" && name.state !== "captured")) {
+      return `full_name was lost to barge-in (state ${name?.state ?? "missing"})`;
+    }
+    const holder = form.account_holder;
+    if (!holder || holder.state === "empty") {
+      return "account_holder was volunteered mid-interruption and lost";
+    }
+    return null;
+  },
 
   decliner: ({ outcome, spoken }) =>
     outcome !== "declined"

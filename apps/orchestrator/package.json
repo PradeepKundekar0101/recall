@@ -14,8 +14,12 @@
     "sandbox:mock": "tsx src/sandbox/mock-server.ts",
     "voice:check": "tsx src/voice-check.ts",
     "voice:calibrate": "tsx src/voice-calibrate.ts",
+    "voice:replay": "tsx src/voice-replay.ts",
     "llm:check": "tsx src/llm-check.ts",
-    "normalise:check": "tsx src/engine/normalise.check.ts"
+    "normalise:check": "tsx src/engine/normalise.check.ts",
+    "dialogue:check": "tsx src/engine/dialogue.check.ts",
+    "tts:check": "tsx src/voice/tts.check.ts",
+    "transport:check": "tsx src/transports/twilio.check.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.126.0",

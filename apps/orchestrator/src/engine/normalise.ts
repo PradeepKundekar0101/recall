@@ -133,7 +133,14 @@ export function normalisePhone(raw: string): NormResult {
  * rejoined before the result can be validated as an email at all.
  */
 export function normaliseEmail(raw: string): NormResult {
-  let text = raw.toLowerCase().trim();
+  let text = raw.toLowerCase().trim().replace(/[.,!?;:]+$/, "");
+  // A correction to a read-back arrives with its preamble attached: "uh, no,
+  // it's the healthcare101@gmail.com". Joining the whole utterance wrote
+  // "it'sthehealthcare101@gmail.com" into the form on the second real call.
+  text = text.replace(
+    /^(?:(?:it is|it's|its|that's|would be|should be|e-mail|email|address|actually|sorry|okay|nope|yeah|yes|yep|well|the|my|is|ok|oh|no|so|uh|um|er)[,\s]+)+/,
+    ""
+  );
   text = text
     .replace(/\s+at\s+/g, "@")
     .replace(/\s+dot\s+/g, ".")
@@ -218,7 +225,15 @@ export function normaliseNmi(raw: string): NormResult {
   return { ok: true, value };
 }
 
-const YES = /\b(yes|yeah|yep|yup|correct|that's right|sure|ok|okay|i do|i am|affirmative)\b/i;
+/**
+ * Agreement as people actually give it on the phone.
+ *
+ * "Fine, but be quick" is consent, and treating it as neither yes nor no made the
+ * agent repeat the entire opener at someone who had just agreed while telling it
+ * they were in a hurry - the exact customer least likely to tolerate that.
+ */
+const YES =
+  /\b(yes|yeah|yep|yup|correct|that'?s right|that'?s me|that'?s the one|sure|ok|okay|fine|alright|all right|go ahead|go on|carry on|please do|i do|i am|i guess|affirmative)\b/i;
 const NO = /\b(no|nope|nah|not really|incorrect|that's wrong|i don't|i'm not|negative)\b/i;
 
 /** Returns null when the answer is neither, which routes to a re-ask. */
@@ -322,8 +337,12 @@ function ordinal(day: number): string {
  *
  * Values are stored normalised because that is what the payload needs, but a
  * read-back is for a human: "So that's the 1989-03-07?" is not a question anyone
- * answers yes to. Dates become spoken dates, booleans become yes and no, and
- * enum values lose their underscores.
+ * answers yes to. Dates become spoken dates, booleans become yes and no, enum
+ * values lose their underscores, and the values people check against a bill -
+ * postcode, NMI, phone - are spaced so they are read digit by digit.
+ *
+ * Digit spacing lives here and nowhere else. Doing it to every digit run at the
+ * TTS layer turned the year in every date into "1 9 8 9".
  */
 export function speakableValue(field: JourneyField, value: FieldValue): string {
   if (value === null || value === undefined) return "";
@@ -339,6 +358,15 @@ export function speakableValue(field: JourneyField, value: FieldValue): string {
 
   if (field.type === "bool") return value ? "yes" : "no";
   if (field.type === "enum" && typeof value === "string") return value.replace(/_/g, " ");
+
+  // A mobile is read the way it is written locally, then digit by digit.
+  if (field.type === "phone" && typeof value === "string") {
+    const local = value.startsWith("+61") ? `0${value.slice(3)}` : value;
+    return local.split("").join(" ");
+  }
+  if ((field.type === "digits" || field.type === "alphanumeric") && typeof value === "string") {
+    return value.split("").join(" ");
+  }
 
   return String(value);
 }

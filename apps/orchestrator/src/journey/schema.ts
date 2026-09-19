@@ -12,6 +12,7 @@ const scriptSchema = z.object({
   ask: z.string().min(1),
   reask: z.string().min(1),
   confirm: z.string().min(1).optional(),
+  prefilled: z.string().min(1).optional(),
 });
 
 const fieldSchema = z.object({

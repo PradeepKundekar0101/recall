@@ -18,7 +18,7 @@ import type { Transport, TransportEndReason } from "./transport.js";
 
 export type EchoStats = {
   turns: number;
-  /** Committed transcript to first audio frame, in milliseconds. */
+  /** Committed transcript to first audio frame on the wire, in milliseconds. */
   roundTripMs: number[];
 };
 
@@ -61,12 +61,20 @@ export class EchoEngine {
 
     const line = `You said: ${text}`;
     this.hooks.onAgentLine(line);
-    await this.transport.speak(line);
 
-    // speak() resolves on playback completion, so the round trip is measured from
-    // the transcript to the point the transport accepted the line - close enough
-    // to first-frame for a go/no-go, and it needs no hook inside the wire path.
-    const ms = Date.now() - heardAt;
+    // Measured to the first frame on the wire, not to the end of playback.
+    //
+    // The first version timed until speak() resolved, which includes however long
+    // the agent spent talking - a nine-second reply was reported as a
+    // ten-second round trip and made a loop running at ~800ms look four times
+    // worse than it is.
+    let ms = 0;
+    await this.transport.speak(line, {
+      onFirstAudio: () => {
+        ms = Date.now() - heardAt;
+      },
+    });
+    if (!ms) ms = Date.now() - heardAt;
     this.stats.turns++;
     this.stats.roundTripMs.push(ms);
     this.hooks.onTurnMeasured(ms, text);

@@ -65,6 +65,11 @@ export async function startCall(opts: {
 
   if (transport instanceof TwilioTransport) liveTwilioTransports.set(callId, transport);
 
+  // The calls row is written before any event references it. call_events has a
+  // foreign key onto it, so emitting first meant every event on a new call failed
+  // its insert - the audit trail was losing the opening of every single call.
+  await openCall({ callId, lead, journeyId: journey.id, testRun: true });
+
   bus.emitEvent(callId, {
     type: "call.hello",
     lead,
@@ -73,7 +78,6 @@ export async function startCall(opts: {
     dial_target: lead.phone,
   });
   bus.emitEvent(callId, { type: "call.status", status: "dialling" });
-  await openCall({ callId, lead, journeyId: journey.id, testRun: true });
 
   let finished = false;
   const startedAt = Date.now();
@@ -169,7 +173,10 @@ export async function startCall(opts: {
                 evidence,
                 fields: state.form.snapshot(),
                 next_field: state.nextField()?.id ?? null,
-                transcript: [],
+                // The last five lines, which is what the human console renders.
+                // This is the panel that proves the customer does not repeat
+                // themselves, so shipping it empty defeated the whole feature.
+                transcript: state.transcript.slice(-5),
                 duration_s: state.durationSeconds,
               },
             });

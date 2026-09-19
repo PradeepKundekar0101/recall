@@ -30,6 +30,8 @@ type ScribeMessage = {
   text?: string;
   words?: ScribeWord[];
   entities?: { text: string; entity_type: string }[];
+  /** The server puts rejection detail here, not in `message`. */
+  error?: string;
   message?: string;
   session_id?: string;
 };
@@ -119,12 +121,23 @@ export async function openScribe(opts: SttOptions): Promise<SttSession> {
 
   let ready = false;
   let closed = false;
+  let framesPushed = 0;
   /** Frames that arrive before the socket opens. Dropping them clips the first word. */
   const backlog: string[] = [];
   /** VAD speech-start is inferred from the first partial of a turn. */
   let turnOpen = false;
 
-  await new Promise<void>((resolve, reject) => {
+  let messagesSeen = 0;
+
+  /**
+   * Every handler is attached before the open handshake is awaited.
+   *
+   * `session_started` arrives the instant the socket opens, and ws drops events
+   * that have no listener yet - so attaching the message handler after awaiting
+   * open silently discarded whatever the server said first. Handler registration
+   * is cheap; ordering it after an await is a race for no benefit.
+   */
+  const opened = new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("scribe did not open within 8s")), 8000);
 
     socket.on("open", () => {
@@ -137,12 +150,14 @@ export async function openScribe(opts: SttOptions): Promise<SttSession> {
 
     socket.on("error", (err) => {
       clearTimeout(timer);
+      log.error(`[${label}] scribe socket error: ${err.message}`);
       events.onError?.(err);
       reject(err);
     });
   });
 
   socket.on("message", (data) => {
+    messagesSeen++;
     let msg: ScribeMessage;
     try {
       msg = JSON.parse(data.toString()) as ScribeMessage;
@@ -153,6 +168,13 @@ export async function openScribe(opts: SttOptions): Promise<SttSession> {
     switch (msg.message_type) {
       case "session_started":
         log.info(`[${label}] scribe session ${msg.session_id ?? "?"}`);
+        break;
+
+      default:
+        // Anything unrecognised is logged once rather than silently dropped. A
+        // socket that opens and then says something we do not handle looks
+        // identical to a socket that says nothing at all.
+        if (messagesSeen <= 5) log.info(`[${label}] scribe -> ${JSON.stringify(msg).slice(0, 200)}`);
         break;
 
       case "partial_transcript": {
@@ -194,21 +216,40 @@ export async function openScribe(opts: SttOptions): Promise<SttSession> {
       case "invalid_request":
       case "input_error":
       case "error":
-        events.onError?.(new Error(`${msg.message_type}: ${msg.message ?? "no detail"}`));
+        // `error` first: that is where the server actually puts the reason, and
+        // reading `message` instead turned a precise rejection ("Invalid entity
+        // types", "cannot be combined with") into a useless "no detail".
+        events.onError?.(new Error(`${msg.message_type}: ${msg.error ?? msg.message ?? "no detail"}`));
         break;
     }
   });
 
-  socket.on("close", () => {
+  socket.on("close", (code, reason) => {
     closed = true;
     ready = false;
+    // Always logged. A Scribe socket that closes mid-call is the difference
+    // between a conversation and dead air, and the transport has no other way to
+    // find out that it happened.
+    log.warn(
+      `[${label}] scribe closed ${code} after ${framesPushed} frames, ${messagesSeen} messages` +
+        (reason?.length ? `: ${reason.toString().slice(0, 200)}` : "")
+    );
     events.onClose?.();
   });
 
   function send(base64Ulaw: string, commit = false): void {
     if (socket.readyState !== WebSocket.OPEN) return;
     socket.send(JSON.stringify({ message_type: "input_audio_chunk", audio_base_64: base64Ulaw, commit }));
+    if (base64Ulaw) {
+      framesPushed++;
+      // Once a second of audio is in, say so. Silence from Scribe with frames
+      // flowing is a very different problem from no frames flowing at all.
+      if (framesPushed === 50) log.info(`[${label}] scribe has taken 1s of audio`);
+      if (framesPushed % 500 === 0) log.info(`[${label}] scribe: ${framesPushed} frames pushed, ${messagesSeen} messages back`);
+    }
   }
+
+  await opened;
 
   return {
     push(base64Ulaw) {

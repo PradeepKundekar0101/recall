@@ -38,7 +38,7 @@ export function newDetectorState(): DetectorState {
 const ANGER_HARD = -0.6;
 const ANGER_SOFT = -0.3;
 // Matches LOW_CONFIDENCE in extract.ts; see the note there on why it is low.
-const LOW_CONF_FLOOR = 0.45;
+const LOW_CONF_FLOOR = 0.25;
 
 /**
  * "stop calling" is deliberately absent. It reads as anger, but it is a withdrawal
@@ -66,6 +66,15 @@ const BUSY_PATTERNS =
 const ROBOT_PATTERNS = /\b(a bot|a robot|a machine|are you (a )?(real|human)|am i talking to)\b/i;
 
 /**
+ * "Can you repeat that?" is a request for the question, not an answer to it.
+ * Left to the model it was scored as a failed attempt at the field and rated
+ * -1 for anger - one of two attempts and a model round trip spent on what is
+ * simply the question again.
+ */
+const REPEAT_PATTERNS =
+  /\b(repeat|say (that|it) again|come again|pardon|what was that|didn'?t (hear|catch|get) (that|you|it)|once more|one more time)\b/i;
+
+/**
  * Intent the engine can decide without the model. Returns null when only the
  * extractor can tell, which is the common case for an ordinary answer.
  */
@@ -80,17 +89,23 @@ const ROBOT_PATTERNS = /\b(a bot|a robot|a machine|are you (a )?(real|human)|am 
 const DONT_KNOW_PATTERNS =
   /\b(don'?t (have|know)|haven'?t got|not sure|no idea|can'?t find|couldn'?t tell you|not handy|somewhere else|skip (it|that))\b/i;
 
+/** Whether the hard-coded anger phrases matched, which fires regardless of answers. */
+export function angerPatternMatched(text: string): boolean {
+  return ANGER_PATTERNS.test(text);
+}
+
 export function looksLikeDontKnow(text: string): boolean {
   return DONT_KNOW_PATTERNS.test(text);
 }
 
-export function ruleIntent(text: string): "decline" | "busy" | "ask_human" | "robot_check" | null {
+export function ruleIntent(text: string): "decline" | "busy" | "ask_human" | "robot_check" | "repeat" | null {
   // Order matters. A decline outranks everything, including a request for a human:
   // "no, don't put me through to anyone, just stop calling" is a decline.
   if (DECLINE_PATTERNS.test(text)) return "decline";
   if (ROBOT_PATTERNS.test(text)) return "robot_check";
   if (ASKS_PATTERNS.test(text)) return "ask_human";
   if (BUSY_PATTERNS.test(text)) return "busy";
+  if (REPEAT_PATTERNS.test(text)) return "repeat";
   return null;
 }
 
@@ -216,12 +231,18 @@ export async function detect(input: DetectInput): Promise<SignalReading[]> {
     fired: offScript,
   });
 
-  // CONFUSION. The field's own re-ask counter.
+  // CONFUSION. The field's own re-ask counter, reported for the meter.
+  //
+  // It does not fire from here. This runs in parallel with extraction, so the
+  // turn being judged may well be the answer that resolves the field - and
+  // firing on `attempts >= maxAttempts` handed off the customer's second attempt
+  // at their name before anyone had looked at it. The engine fires it at the
+  // point a field would have to be asked once more than max_attempts allows.
   readings.push({
     signal: "CONFUSION",
     score: maxAttempts ? Math.min(1, attempts / maxAttempts) : 0,
     evidence: attempts ? `${attempts} attempts on the current field` : "",
-    fired: attempts >= maxAttempts,
+    fired: attempts > maxAttempts,
   });
 
   // LOW CONF. Two consecutive turns.
@@ -300,12 +321,52 @@ export class EscalationDetector {
     return this.fired;
   }
 
-  /** Every reading, whether or not it fired, so the console can draw the build-up. */
+  /**
+   * Every reading, whether or not it fired, so the console can draw the build-up.
+   *
+   * ANGER is deliberately not fired from here. It is the only signal that comes
+   * from a model judging tone rather than from a rule, and it runs in parallel
+   * with extraction - so at this point nobody knows yet whether the customer was
+   * venting or simply answering the question. "Priya Sharma, and before you ask
+   * I'm the account holder" reads as impatient and is in fact two clean answers;
+   * handing that call to a human is a worse failure than missing a grumble.
+   *
+   * The engine calls `resolveAnger` once extraction has landed.
+   */
   async evaluate(input: Omit<DetectInput, "state">): Promise<SignalReading[]> {
     const readings = await detect({ ...input, state: this.state });
-    const winner = decide(readings);
+    const winner = decide(readings.filter((r) => r.signal !== "ANGER"));
     if (winner) this.fire(winner);
     return readings;
+  }
+
+  /**
+   * Decides ANGER now that the turn's outcome is known.
+   *
+   * A pattern match fires regardless - "I've already told three of you" is not
+   * ambiguous however many fields it happens to contain. A model-only judgement
+   * fires only when the turn produced nothing, because a customer who is
+   * answering is not a customer who needs rescuing.
+   */
+  resolveAnger(readings: SignalReading[], opts: { producedAnswers: boolean; patternMatched: boolean }): void {
+    const anger = readings.find((r) => r.signal === "ANGER");
+    if (!anger?.fired) return;
+
+    // An unambiguous phrase fires on the spot: "I've already told three of you"
+    // needs no corroboration.
+    if (opts.patternMatched) return void this.fire(anger);
+
+    // A model-only judgement does not. The brief allows a single score of -0.6 to
+    // trigger, but measured against real turns the classifier reads ordinary
+    // answers as hostile often enough that honouring one reading ends good calls
+    // - "I don't have it handy, sorry" is not a customer in distress. A false
+    // handoff mid-journey is far more expensive than a late one: the sustained
+    // signal still fires a turn later, and a genuinely angry customer does not
+    // calm down in the interim.
+    if (opts.producedAnswers) return;
+    if (this.state.angerStreak < 2) return;
+
+    this.fire(anger);
   }
 
   /**

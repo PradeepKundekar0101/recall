@@ -33,8 +33,15 @@ export function attachMediaStream(callId: string, ws: WebSocket): boolean {
   return true;
 }
 
+/**
+ * The slice of the Twilio SDK the transport uses. `pnpm transport:check` injects
+ * a fake; everything else gets the real client. Without the seam the check
+ * dialled the test handset for real.
+ */
+export type TwilioClient = Pick<ReturnType<typeof twilio>, "calls">;
+
 let _twilio: ReturnType<typeof twilio> | null = null;
-function client() {
+function client(): TwilioClient {
   if (!_twilio) _twilio = twilio(env.twilioSid, env.twilioToken);
   return _twilio;
 }
@@ -51,6 +58,26 @@ export function assertTestNumber(to: string): void {
     throw new Error(
       `refusing to dial ${to}: not in TEST_NUMBERS (${env.testNumbers.join(", ") || "empty"})`
     );
+  }
+}
+
+/**
+ * Guardrail 1 for the transfer leg.
+ *
+ * The handoff handset is ours, so it is allowed whether or not it is also a
+ * TEST_NUMBER. Requiring it to be one refused every transfer on the second real
+ * call: the preflight rightly wants the handoff handset to be a *different*
+ * phone from the customer's, and the customer's is the one on the allowlist.
+ * What must never happen is dialling a number that is neither ours nor
+ * configured, or the phone that is already on the call.
+ */
+export function assertHandoffNumber(to: string, customer: string): void {
+  const ours = new Set([...env.testNumbers, env.handoffNumber].filter(Boolean));
+  if (!ours.has(to)) {
+    throw new Error(`refusing to transfer to ${to}: not HANDOFF_NUMBER and not in TEST_NUMBERS`);
+  }
+  if (to === customer) {
+    throw new Error(`refusing to transfer to ${to}: that is the phone already on the call`);
   }
 }
 
@@ -96,7 +123,23 @@ export class TwilioTransport implements Transport {
   private lastSpokenTokens = new Set<string>();
   private playbackEndedAt = 0;
 
-  constructor(private opts: TransportDeps) {
+  /**
+   * Inbound cadence. Twilio sends a frame every 20 ms; a hole in that rhythm is
+   * audio that reached the STT late and in a burst, which on a call looks
+   * exactly like the customer saying nothing. On the first journey call one
+   * answer never produced a transcript at all, and nothing recorded whether
+   * the frames had arrived on time. Now something does.
+   */
+  private lastMediaAt = 0;
+  private inboundStalls = 0;
+  private longestStallMs = 0;
+
+  /** False while a line that must be heard whole is playing. */
+  private interruptible = true;
+  /** Set once the call has been handed to a human. It is theirs from then on. */
+  private transferred = false;
+
+  constructor(private opts: TransportDeps & { client?: TwilioClient }) {
     this.id = opts.callId;
     this.streamReady = new Promise<void>((resolve) => {
       this.markStreamReady = resolve;
@@ -110,7 +153,7 @@ export class TwilioTransport implements Transport {
     const streamUrl = `${env.publicBaseUrl.replace(/^https/, "wss")}/media/${this.opts.callId}`;
     log.call(this.id, `TEST RUN - dialling ${to} for lead ${this.opts.lead.id}`);
 
-    const call = await client().calls.create({
+    const call = await this.api().calls.create({
       to,
       from: env.twilioFrom,
       twiml:
@@ -156,6 +199,10 @@ export class TwilioTransport implements Transport {
     log.call(this.id, `media stream live - streamSid ${this.streamSid}`);
   }
 
+  private api(): TwilioClient {
+    return this.opts.client ?? client();
+  }
+
   private async bindSocket(ws: WebSocket): Promise<void> {
     ws.on("message", (data) => {
       let msg: {
@@ -179,10 +226,19 @@ export class TwilioTransport implements Transport {
           log.call(this.id, `stream start - sid ${this.streamSid}`);
           if (this.streamSid) this.markStreamReady();
           break;
-        case "media":
+        case "media": {
           // Straight through. No decode, no resample.
           if (msg.media?.payload) this.stt?.push(msg.media.payload);
+          const now = Date.now();
+          const stall = this.lastMediaAt ? now - this.lastMediaAt : 0;
+          if (stall > 250) {
+            this.inboundStalls++;
+            this.longestStallMs = Math.max(this.longestStallMs, stall);
+            log.call(this.id, `inbound audio stalled for ${stall}ms`);
+          }
+          this.lastMediaAt = now;
           break;
+        }
         case "mark": {
           const name = msg.mark?.name;
           if (name) {
@@ -216,7 +272,7 @@ export class TwilioTransport implements Transport {
         },
         onPartial: (text) => {
           this.partialCb?.(text);
-          if (!this.speaking || !this.bargeArmed) return;
+          if (!this.speaking || !this.bargeArmed || !this.interruptible) return;
           if (!meaningfulSpeech(text) || this.isEcho(text)) return;
           this.bargeArmed = false;
           log.call(this.id, `barge-in confirmed by "${text.slice(0, 30)}"`);
@@ -230,14 +286,15 @@ export class TwilioTransport implements Transport {
             return;
           }
           // Finals can arrive without a partial ever firing; honour barge-in here too.
-          if (this.speaking && meaningfulSpeech(text)) {
+          if (this.speaking && this.interruptible && meaningfulSpeech(text)) {
             this.bargeArmed = false;
             this.clearPlayback();
             this.bargeInCb?.();
           }
           this.utteranceCb?.(text, confidence);
         },
-        onError: (err) => log.call(this.id, `stt: ${err.message}`),
+        onError: (err) => log.call(this.id, `stt error: ${err.message}`),
+        onClose: () => log.call(this.id, "stt socket closed"),
       },
     });
   }
@@ -255,8 +312,9 @@ export class TwilioTransport implements Transport {
     this.endedCb = cb;
   }
 
-  async speak(text: string): Promise<void> {
+  async speak(text: string, opts: { onFirstAudio?: () => void; interruptible?: boolean } = {}): Promise<void> {
     if (this.dead) return;
+    this.interruptible = opts.interruptible ?? true;
 
     // Never drop a line because the stream was a beat late.
     if (!this.streamSid) await this.streamReady.catch(() => undefined);
@@ -293,6 +351,7 @@ export class TwilioTransport implements Transport {
       if (!started) {
         this.speaking = true;
         started = true;
+        opts.onFirstAudio?.();
       }
 
       for (let off = 0; off < audio.length; off += FRAME_BYTES) {
@@ -354,6 +413,7 @@ export class TwilioTransport implements Transport {
 
     let spoken = "";
     let started = false;
+    this.interruptible = true;
 
     for await (const sentence of sentences) {
       if (signal?.aborted || this.dead || !this.ws || !this.streamSid) break;
@@ -432,18 +492,19 @@ export class TwilioTransport implements Transport {
    */
   async transfer(toNumber: string, whisper: string): Promise<void> {
     if (!this.twilioCallSid) throw new Error("no live Twilio call to transfer");
-    assertTestNumber(toNumber);
+    assertHandoffNumber(toNumber, this.opts.lead.phone);
 
     this.clearPlayback();
     // The whisper is played to the human only: Twilio fetches the <Number url>
     // when they answer, and that TwiML never reaches the customer's leg.
-    await client()
+    await this.api()
       .calls(this.twilioCallSid)
       .update({
         twiml: `<Response><Dial answerOnBridge="true"><Number url="${env.publicBaseUrl}/twilio/whisper?text=${encodeURIComponent(whisper)}">${toNumber}</Number></Dial></Response>`,
       });
 
     log.call(this.id, `transferred to ${toNumber} - whisper: ${whisper}`);
+    this.transferred = true;
     this.end("transferred");
   }
 
@@ -486,9 +547,13 @@ export class TwilioTransport implements Transport {
   }
 
   async hangup(): Promise<void> {
+    // A transferred call belongs to the human now. The engine finalises after a
+    // transfer and lands here; completing the call at that point tears the Dial
+    // down before it has rung anyone.
+    if (this.transferred) return;
     if (this.twilioCallSid) {
       try {
-        await client().calls(this.twilioCallSid).update({ status: "completed" });
+        await this.api().calls(this.twilioCallSid).update({ status: "completed" });
       } catch {
         /* already ended */
       }
@@ -505,6 +570,12 @@ export class TwilioTransport implements Transport {
     } catch {
       /* already closed */
     }
+    log.call(
+      this.id,
+      this.inboundStalls
+        ? `inbound audio: ${this.inboundStalls} stall(s) over 250ms, longest ${this.longestStallMs}ms`
+        : "inbound audio: no stalls over 250ms"
+    );
     liveTwilioTransports.delete(this.id);
     this.endedCb?.(reason);
   }
@@ -538,20 +609,43 @@ export function splitForTts(text: string): string[] {
   return parts.length ? parts : [text.trim()];
 }
 
+/** Scribe rejects the whole connection if any keyterm exceeds this. */
+const MAX_KEYTERM_CHARS = 20;
+
 /**
- * Bias recognition toward the words this call will actually contain: the customer's
- * own name and suburb, the plan they were looking at, and every enum value in the
- * journey. Postcodes and NMIs are spelled out rather than recognised as words.
+ * Bias recognition toward the words this call will actually contain.
+ *
+ * Only things a person says out loud. Emails, phone numbers, dates and plan ids
+ * are values, not vocabulary - they are spelled or read digit by digit, so they
+ * help recognition not at all, and one of them cost a live call: an email in the
+ * prefill became a 24-character keyterm and Scribe rejected the entire socket
+ * with `invalid_request`, which surfaced as the agent greeting the customer and
+ * then never hearing a word.
+ *
+ * Over-length terms are dropped rather than truncated. A truncated keyterm is a
+ * word the model is being told to expect and will never hear.
  */
 export function recognitionKeywords(deps: TransportDeps): string[] {
-  const enums = deps.journey.fields.flatMap((f) => f.options ?? []);
-  const prefill = Object.values(deps.lead.prefill)
-    .filter((v): v is string => typeof v === "string")
-    .filter((v) => v.length > 2 && !/^\d+$/.test(v));
-  return [deps.lead.full_name, deps.lead.plan_name ?? "", ...prefill, ...enums]
-    .flatMap((s) => s.split(/\s+/))
-    .filter((w) => w.length > 2)
-    .slice(0, 50);
+  const spoken = [
+    deps.lead.full_name,
+    deps.lead.plan_name ?? "",
+    // Prefilled text the customer might repeat: a suburb, a street name. Values
+    // that are read out character by character are excluded below.
+    ...Object.entries(deps.lead.prefill)
+      .filter(([id]) => !["email", "phone", "dob", "postcode", "nmi", "plan_id"].includes(id))
+      .map(([, value]) => (typeof value === "string" ? value : "")),
+    // Enum options are answers people say: "electricity", "both", "pension".
+    ...deps.journey.fields.flatMap((f) => f.options ?? []),
+  ];
+
+  const words = spoken
+    .flatMap((s) => s.split(/[\s_]+/))
+    .map((w) => w.replace(/[^\p{L}\p{N}'-]/gu, "").trim())
+    .filter((w) => w.length > 2 && w.length <= MAX_KEYTERM_CHARS)
+    // A bare number is never a useful hint; it is dictated, not recognised.
+    .filter((w) => !/^\d+$/.test(w));
+
+  return [...new Set(words)].slice(0, 50);
 }
 
 export function escapeXml(s: string): string {

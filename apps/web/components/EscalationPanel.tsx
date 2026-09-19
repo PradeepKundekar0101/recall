@@ -38,10 +38,8 @@ export function EscalationPanel({
     <>
       {handoff && (
         <div className="handoff-banner">
-          <div className="label" style={{ color: "inherit" }}>
-            Handed off - {handoff.reason.replace(/_/g, " ")}
-          </div>
-          <div style={{ marginTop: 4 }}>{handoff.packet.evidence}</div>
+          <div className="label">Handed off - {handoff.reason.replace(/_/g, " ")}</div>
+          <div className="banner-evidence">{handoff.packet.evidence}</div>
         </div>
       )}
 
@@ -77,11 +75,11 @@ export function EscalationPanel({
         );
       })}
 
-      <div className="section-head" style={{ marginTop: 20 }}>
+      <div className="section-head script-pos-head">
         <span className="label">Script position</span>
         <span className="section-rule" />
       </div>
-      <div style={{ color: "var(--ink-dim)" }}>
+      <div className="script-pos">
         {section ? `${section} / ${askingField ?? "-"}` : "not started"}
       </div>
     </>

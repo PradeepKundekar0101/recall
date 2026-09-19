@@ -23,8 +23,8 @@ Set the three keys, `MOCK_VOICE=0`, `TRANSPORT=pstn`, point ngrok at :8080, and 
 | Guardrails: DNC, test-number, consent gate, card detection, decline | done |
 | Sandbox mapping, incremental + final submit, mock server | done |
 | Operator console, handoff console | done |
-| Scribe v2 Realtime STT, Deepgram fallback | written, unverified against live audio |
-| ElevenLabs Flash v2.5 TTS, disk pre-render | written, unverified against live audio |
+| Scribe v2 Realtime STT, Deepgram fallback | Scribe verified on live calls; Deepgram fallback still unverified, no key in `.env` |
+| ElevenLabs TTS on the voice's fine-tuned model (Flash v2), loudness levelling, disk pre-render | verified with `pnpm voice:check` |
 | Dialogue engine, barge-in cancellation, silence handling | done |
 | Echo mode and per-turn latency measurement | done |
 | Energy scripts and field list | placeholder until the recording arrives |
@@ -49,7 +49,30 @@ Every vendor sits behind an env switch, so swapping one is a config change rathe
 | `CALL_MODE` | `echo`, `journey` | `echo` repeats back what STT heard. It is the infrastructure check. |
 | `TRANSPORT` | `sim`, `pstn` | `sim` runs the exact engine against scripted personas without dialling. |
 
-**OpenRouter works, with two caveats.**
+**Provider latency, measured with `pnpm llm:check`** (warm medians, 4 samples):
+
+| Provider / model | Extraction | First sentence |
+| --- | --- | --- |
+| **openai / gpt-4o-mini (direct)** | **1475 ms** | **832 ms** |
+| openrouter / google gemini-2.5-flash-lite | 1110 ms | 1067 ms |
+| openrouter / openai gpt-4o-mini | 1686 ms | 3034 ms |
+| openrouter / anthropic claude-haiku-4.5 | 2067 ms | 1426 ms |
+
+Direct OpenAI is the demo path.
+The gateway's penalty lands mostly on streaming - 3034 ms against 832 ms for the same model - and cold and warm are near-identical through it, so it is fixed overhead rather than connection setup.
+
+Extraction is still well over the 250 ms the budget allows, which is why the mitigations below matter more than the provider choice does.
+
+**Mitigations already in place**, which matter more than the provider choice:
+
+- Every scripted line is pre-rendered to ulaw on disk and spoken verbatim, so the model is off the speech path entirely.
+- **Closed fields never reach the model.** A yes/no or an enum answer is matched in code, so those turns complete in single-digit milliseconds. Roughly a third of the journey's questions are closed.
+- A short pre-rendered filler plays at 400 ms, but only on turns that actually need the model - in front of an instant turn it is chatter, not cover.
+- Closed answers also skip the sentiment classifier.
+
+Measured effect on a full simulated journey: 32 s down to 20 s, and 13 of 15 fields captured hands-free.
+
+**The older caveats still apply.**
 It is OpenAI-compatible, so it uses the same client with a different base URL; set `OPENROUTER_API_KEY` and `LLM_PROVIDER=openrouter`, and use org-prefixed model ids like `anthropic/claude-haiku-4.5`.
 The caveats are that it adds a network hop in front of the model, against a budget that only allows 250 ms to first token, and that `strict` tool calling is model-dependent behind the gateway - so it is sent without `strict` and the extractor's own validation holds the line instead.
 Run `pnpm llm:check` to measure both before committing to it for the demo.
@@ -85,8 +108,12 @@ The orchestrator prints an integration report at boot, so a missing key is obvio
 | `pnpm llm:check` | Prove the configured LLM can do structured extraction and streaming, and measure both. Needs `MOCK_VOICE=0`. |
 | `pnpm voice:check` | Synthesise a phrase with Flash, feed it back into Scribe, check the transcript. Needs `MOCK_VOICE=0`. |
 | `pnpm voice:calibrate` | Measure the confidence scale clean vs degraded. Re-run on real phone audio. |
+| `pnpm voice:replay <wav>` | Feed a Twilio call recording back through the live STT socket, paced like the media stream, to tell a bad line from a bad transcriber. |
 | `pnpm twilio:check` | Geo permissions, from-number, trial status, tunnel websocket upgrade |
 | `pnpm eval` | Run the ten simulator personas (gate: 9/10) |
+| `pnpm dialogue:check` | The engine's turn logic against a fake line: prefilled values confirmed rather than asked, the second attempt heard before CONFUSION, nudges held while the customer talks. No vendors. |
+| `pnpm tts:check` | mulaw round-trip and loudness levelling. Milliseconds, no network. |
+| `pnpm transport:check` | The Twilio transport against a fake Twilio and a fake media stream: dial, stream handshake, warm transfer, and the hangup that must not follow a transfer. No phone is rung. |
 | `pnpm typecheck` | All three packages |
 
 ## Layout
@@ -138,7 +165,7 @@ The extractor's own score is multiplied by the STT word confidence over the evid
 ## Known gaps
 
 - **The confidence scale needs re-measuring on real phone audio.** The current baseline was measured on synthetic speech fed back through the encoder, which is not a mobile handset in a loud room. Run `pnpm voice:calibrate` once real call audio exists.
-- No LLM key is set, so extraction, the review gate and 7 of the 10 personas are still untested. Echo mode does not need one.
+- **OpenRouter adds roughly a second of fixed latency**, which the turn budget cannot absorb. See below.
 - `TEST_NUMBERS` currently holds an Indian number carried over from the old project. Replace it with the AU test numbers the organisers provide.
 - The Energy field list and scripts in `energy.journey.json` are placeholders, pending the recording.
 - The manual baseline for the efficiency counter is zero until it can be measured, rather than a number invented to make the comparison look good.
