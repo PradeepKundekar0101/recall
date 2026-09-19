@@ -2051,3 +2051,16 @@ a.btn-primary { color: var(--on-primary); }
   .kinds-track { grid-column: 1 / -1; grid-row: 2; }
   .kinds-n { grid-column: 1 / -1; grid-row: 3; }
 }
+
+/* The raw count under the rate the table is sorted by. Quiet, because the rate
+   is the comparison and the count is the evidence for it, and on its own line
+   because a rate and a count side by side are two numbers a reader has to pull
+   apart before either of them means anything. */
+.num-aside {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  white-space: nowrap;
+}

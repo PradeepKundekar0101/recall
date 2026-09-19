@@ -22,13 +22,18 @@ export function FieldTable({ fields }: { fields: FieldStat[] }) {
             <th scope="col">Field</th>
             <th scope="col">Asked</th>
             <th scope="col">First try</th>
-            <th scope="col">Re-asks</th>
+            {/* The server sorts on re-asks per call, so that is what the column
+                shows. Showing the raw count against a rate sort made the table
+                read as mis-sorted whenever two fields were asked a different
+                number of times. The count is still here, beside it. */}
+            <th scope="col">Re-asks per call</th>
             <th scope="col">Confidence</th>
           </tr>
         </thead>
         <tbody>
           {fields.map((field) => {
             const firstTry = field.asked ? field.captured_first_try / field.asked : null;
+            const reAskRate = field.asked ? field.re_asks / field.asked : null;
             return (
               <tr key={field.id}>
                 <th scope="row">
@@ -37,7 +42,12 @@ export function FieldTable({ fields }: { fields: FieldStat[] }) {
                 </th>
                 <td>{field.asked}</td>
                 <td>{firstTry === null ? "-" : `${Math.round(firstTry * 100)}%`}</td>
-                <td className={field.re_asks > 0 ? "num-warn" : undefined}>{field.re_asks}</td>
+                <td className={field.re_asks > 0 ? "num-warn" : undefined}>
+                  {reAskRate === null ? "-" : reAskRate.toFixed(2)}
+                  <span className="num-aside">
+                    {field.re_asks} {field.re_asks === 1 ? "re-ask" : "re-asks"}
+                  </span>
+                </td>
                 <td>{field.mean_confidence === null ? "-" : `${Math.round(field.mean_confidence * 100)}%`}</td>
               </tr>
             );

@@ -61,6 +61,12 @@ export function Histogram({ buckets, budgetMs }: { buckets: Bucket[]; budgetMs: 
           const x = PAD.left + band * i + (band - barWidth) / 2;
           // The rule is the only thing that says whether a turn was fast enough, so
           // which side of it a column sits on is the column's second encoding.
+          //
+          // `>=` on `from_ms` is exactly `ms > budget`, the test aggregate.ts
+          // counts `over_budget` with, because the server's buckets are open at
+          // the bottom and closed at the top: a turn of exactly 800ms met the
+          // budget and lands in the bucket that ends at 800, not the one that
+          // starts there. The two used to disagree on that one value.
           const overBudget = bucket.from_ms >= budgetMs;
           return (
             <path

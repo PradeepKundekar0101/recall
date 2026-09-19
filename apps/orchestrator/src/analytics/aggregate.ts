@@ -79,13 +79,26 @@ function countBy<T>(rows: T[], pick: (row: T) => string | null): Record<string, 
 
 const KINDS: TurnKind[] = ["closed_field", "cached_line", "synthesised"];
 
-/** Fixed buckets, so two windows drawn side by side share an x axis. */
+/**
+ * Fixed buckets, so two windows drawn side by side share an x axis.
+ *
+ * One edge is the budget on purpose, which is what forces the buckets to be
+ * open at the bottom and closed at the top rather than the other way round: a
+ * turn of exactly 800ms met the budget, `over_budget` counts `ms > budget`, and
+ * a bucket running [800, 1000) would put that turn in the first bucket past the
+ * rule. The chart would then draw it over budget while the count beside the
+ * chart had it under. With (600, 800] holding it, "at or past the budget edge"
+ * and "over budget" are the same set of turns.
+ */
 const HISTOGRAM_EDGES = [0, 200, 400, 600, 800, 1000, 1500, 2000, 3000];
 
 function histogram(values: number[]): { from_ms: number; to_ms: number | null; count: number }[] {
   return HISTOGRAM_EDGES.map((from, i) => {
     const to = HISTOGRAM_EDGES[i + 1] ?? null;
-    const count = values.filter((v) => v >= from && (to === null || v < to)).length;
+    // The first bucket is closed at both ends, or a turn measured at 0ms - which
+    // a closed field can genuinely be - would fall out of the histogram entirely
+    // and the bucket counts would no longer account for every turn.
+    const count = values.filter((v) => (i === 0 ? v >= from : v > from) && (to === null || v <= to)).length;
     return { from_ms: from, to_ms: to, count };
   });
 }

@@ -376,11 +376,40 @@ function report(over: Partial<{ calls: CallLite[]; turns: TurnRow[]; fieldEvents
   check("the open-ended last bucket catches a value far past every fixed edge", last?.count === 1, String(last?.count));
 }
 
+// ---- a turn measured at 0ms still lands in a bucket
+// (the buckets are open at the bottom, so the first one has to be closed at
+// both ends or a closed field that resolved instantly falls out of the chart)
+{
+  const r = report({ turns: [turn({ first_audio_ms: 0, think_ms: 0, wire_wait_ms: 0, tts_ttfb_ms: 0 })] });
+  const total = r.latency.histogram.reduce((sum, bucket) => sum + bucket.count, 0);
+  check("a turn measured at 0ms is still counted in a bucket", total === 1, String(total));
+}
+
 // ---- over budget
 {
   const r = report({ turns: [turn({ first_audio_ms: 400 }), turn({ first_audio_ms: 1200 })] });
   check("over-budget counts turns past the budget", r.latency.over_budget === 1, String(r.latency.over_budget));
   check("the budget is reported so the page does not hardcode it", r.latency.budget_ms === 800);
+}
+
+// ---- the chart and the count agree about a turn that is exactly the budget
+// (the budget is a ceiling the turn met, so 800ms is not over it. The histogram
+// draws every bucket at or past the budget edge as over budget, so that edge has
+// to fall between the two: a bucket of [800, 1000) would have drawn this turn
+// over budget while the number beside the chart counted it under.)
+{
+  const r = report({ turns: [turn({ first_audio_ms: 800 }), turn({ first_audio_ms: 801 })] });
+  check("a turn measured at exactly the budget is not over it", r.latency.over_budget === 1, String(r.latency.over_budget));
+  const atBudget = r.latency.histogram.find((bucket) => bucket.to_ms === 800);
+  check("a turn at exactly the budget sits in the bucket that ends at the budget", atBudget?.count === 1, JSON.stringify(atBudget));
+  const pastEdge = r.latency.histogram
+    .filter((bucket) => bucket.from_ms >= 800)
+    .reduce((sum, bucket) => sum + bucket.count, 0);
+  check(
+    "the buckets at or past the budget edge hold exactly the over-budget turns",
+    pastEdge === r.latency.over_budget,
+    `${pastEdge} vs ${r.latency.over_budget}`
+  );
 }
 
 // ---- empty window
