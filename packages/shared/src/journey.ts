@@ -46,6 +46,13 @@ export type FieldScript = {
   reask: string;
   /** Read-back template. `{value}` and `{value_spelled}` are substituted. */
   confirm?: string;
+  /**
+   * Spoken when the lead already carries a value: a yes/no confirmation of it,
+   * with `{value}` and `{value_spelled}` substituted. Without one the engine
+   * falls back to `confirm`, or to `ask` for a closed field whose question is
+   * already a yes/no.
+   */
+  prefilled?: string;
 };
 
 export type JourneyField = {

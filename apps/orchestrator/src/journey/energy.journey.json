@@ -46,7 +46,8 @@
       "script": {
         "ask": "Can I start with your full name?",
         "reask": "Sorry, I didn't catch that. What was your full name?",
-        "confirm": "I have {value}. Is that right?"
+        "confirm": "I have {value}. Is that right?",
+        "prefilled": "I have your full name as {value}. Is that right?"
       },
       "max_attempts": 2,
       "sensitive": false
@@ -62,7 +63,8 @@
       "script": {
         "ask": "What's your date of birth?",
         "reask": "Sorry, could you give me your date of birth again?",
-        "confirm": "So that's the {value}?"
+        "confirm": "So that's the {value}?",
+        "prefilled": "And your date of birth as the {value}. Is that right?"
       },
       "validate": "date_past",
       "max_attempts": 2,
@@ -111,7 +113,8 @@
       "script": {
         "ask": "What's the best email address for you? You can spell out the part before the at-sign.",
         "reask": "Sorry, I didn't catch that. Could you spell it letter by letter?",
-        "confirm": "I have {value_spelled}. Is that right?"
+        "confirm": "I have {value_spelled}. Is that right?",
+        "prefilled": "The email we have for you is {value}. Is that right?"
       },
       "validate": "email",
       "max_attempts": 2,
@@ -128,7 +131,8 @@
       "script": {
         "ask": "What's the street address where the energy is supplied?",
         "reask": "Sorry, could you give me that street address again?",
-        "confirm": "I have {value}. Is that right?"
+        "confirm": "I have {value}. Is that right?",
+        "prefilled": "For the supply address, I have {value}. Is that right?"
       },
       "max_attempts": 2,
       "sensitive": false
@@ -144,7 +148,8 @@
       "script": {
         "ask": "And the suburb?",
         "reask": "Sorry, which suburb was that?",
-        "confirm": "{value}, is that right?"
+        "confirm": "{value}, is that right?",
+        "prefilled": "In {value}. Is that right?"
       },
       "max_attempts": 2,
       "sensitive": false
@@ -160,7 +165,8 @@
       "script": {
         "ask": "And the postcode?",
         "reask": "Sorry, could you give me those four digits again?",
-        "confirm": "{value_spelled}. Correct?"
+        "confirm": "{value_spelled}. Correct?",
+        "prefilled": "Postcode {value_spelled}. Is that right?"
       },
       "validate": "postcode_au",
       "max_attempts": 2,
@@ -186,7 +192,8 @@
       ],
       "script": {
         "ask": "And which state is that in?",
-        "reask": "Sorry, which state?"
+        "reask": "Sorry, which state?",
+        "prefilled": "And that's in {value}. Is that right?"
       },
       "max_attempts": 2,
       "sensitive": false,
