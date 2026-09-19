@@ -233,7 +233,7 @@ export function normaliseNmi(raw: string): NormResult {
  * they were in a hurry - the exact customer least likely to tolerate that.
  */
 const YES =
-  /\b(yes|yeah|yep|yup|correct|that'?s right|that'?s me|that'?s the one|sure|ok|okay|fine|alright|all right|go ahead|go on|carry on|please do|i do|i am|i guess|affirmative)\b/i;
+  /\b(yes|yeah|yep|yup|correct|right|that'?s right|that'?s me|that'?s the one|sure|ok|okay|fine|alright|all right|go ahead|go on|carry on|please do|i do|i am|i guess|affirmative)\b/i;
 const NO = /\b(no|nope|nah|not really|incorrect|that's wrong|i don't|i'm not|negative)\b/i;
 
 /** Returns null when the answer is neither, which routes to a re-ask. */

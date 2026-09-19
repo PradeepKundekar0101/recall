@@ -66,6 +66,13 @@ const BOOLS: { input: string; expect: boolean | null }[] = [
   { input: "No, nothing like that.", expect: false },
   { input: "nope", expect: false },
   { input: "no, that's right", expect: true },
+  // Call aead90d7. Asked "so that's the 1st of September, 2002?" the customer
+  // said "Right." and the engine heard neither a yes nor a no, threw the date
+  // away and asked for it again. The recording is unambiguous; the live
+  // transcript rendered it "Thank you." at 0.50, which is its own reason not to
+  // depend on hearing a longer word.
+  { input: "Right.", expect: true },
+  { input: "right, that's it", expect: true },
   { input: "maybe later", expect: null },
 ];
 
