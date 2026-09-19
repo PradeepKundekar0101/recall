@@ -5,7 +5,14 @@ import { log } from "../log.js";
 import { openStt, type SttSession } from "../voice/stt.js";
 import type { SttOpener } from "../voice/stt/types.js";
 import { synthesize } from "../voice/tts.js";
-import type { SpeakResult, Transport, TransportDeps, TransportEndReason, UtteranceMeta } from "../engine/transport.js";
+import type {
+  AudioMeta,
+  SpeakResult,
+  Transport,
+  TransportDeps,
+  TransportEndReason,
+  UtteranceMeta,
+} from "../engine/transport.js";
 
 /**
  * Twilio Media Streams <-> Deepgram / ElevenLabs, mulaw 8k end to end.
@@ -348,7 +355,10 @@ export class TwilioTransport implements Transport {
     this.endedCb = cb;
   }
 
-  async speak(text: string, opts: { onFirstAudio?: () => void; interruptible?: boolean } = {}): Promise<SpeakResult> {
+  async speak(
+    text: string,
+    opts: { onFirstAudio?: () => void; onAudioMeta?: (meta: AudioMeta) => void; interruptible?: boolean } = {}
+  ): Promise<SpeakResult> {
     return this.onTheWire(() => this.playLine(text, opts));
   }
 
@@ -364,7 +374,7 @@ export class TwilioTransport implements Transport {
 
   private async playLine(
     text: string,
-    opts: { onFirstAudio?: () => void; interruptible?: boolean }
+    opts: { onFirstAudio?: () => void; onAudioMeta?: (meta: AudioMeta) => void; interruptible?: boolean }
   ): Promise<SpeakResult> {
     const nothing: SpeakResult = { completed: false, heard: "" };
     if (this.dead) return nothing;
@@ -382,7 +392,7 @@ export class TwilioTransport implements Transport {
     // short TTS call, not the whole reply.
     const parts = splitForTts(text);
     const jobs = parts.map((p) =>
-      synthesize({ text: p }).catch((err) => {
+      synthesize({ text: p, onMeta: opts.onAudioMeta }).catch((err) => {
         log.call(this.id, `TTS failed: ${err instanceof Error ? err.message : err}`);
         return Buffer.alloc(0);
       })
@@ -462,11 +472,19 @@ export class TwilioTransport implements Transport {
    * aborts the signal and the loop stops feeding sentences at someone who has
    * already started talking.
    */
-  async speakStream(sentences: AsyncIterable<string>, signal?: AbortSignal): Promise<string> {
-    return this.onTheWire(() => this.streamLine(sentences, signal));
+  async speakStream(
+    sentences: AsyncIterable<string>,
+    signal?: AbortSignal,
+    onFirstAudio?: () => void
+  ): Promise<string> {
+    return this.onTheWire(() => this.streamLine(sentences, signal, onFirstAudio));
   }
 
-  private async streamLine(sentences: AsyncIterable<string>, signal?: AbortSignal): Promise<string> {
+  private async streamLine(
+    sentences: AsyncIterable<string>,
+    signal?: AbortSignal,
+    onFirstAudio?: () => void
+  ): Promise<string> {
     if (this.dead) return "";
     if (!this.streamSid) await this.streamReady.catch(() => undefined);
     if (this.dead || !this.ws || !this.streamSid) return "";
@@ -489,6 +507,7 @@ export class TwilioTransport implements Transport {
         this.speaking = true;
         started = true;
         this.bargeArmed = false;
+        onFirstAudio?.();
       }
       spoken += `${sentence} `;
       this.lastSpokenTokens = tokenize(spoken);

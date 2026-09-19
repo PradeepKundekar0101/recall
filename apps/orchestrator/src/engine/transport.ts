@@ -23,6 +23,15 @@ export type SpeakResult = {
   heard: string;
 };
 
+/**
+ * What the audio for one line cost to produce.
+ *
+ * `cached` is the difference between a pre-rendered script line read off disk
+ * and a live ElevenLabs round trip. They differ by an order of magnitude, so
+ * averaging them together produces a number that describes neither.
+ */
+export type AudioMeta = { cached: boolean; chars: number };
+
 /** What the transport knows about an utterance beyond its words. */
 export type UtteranceMeta = {
   /**
@@ -53,7 +62,10 @@ export interface Transport {
    * The handoff bridge has to be heard whole: cut short by a customer still
    * finishing their address, it left them with "I'm going to" and a dead line.
    */
-  speak(text: string, opts?: { onFirstAudio?: () => void; interruptible?: boolean }): Promise<SpeakResult>;
+  speak(
+    text: string,
+    opts?: { onFirstAudio?: () => void; onAudioMeta?: (meta: AudioMeta) => void; interruptible?: boolean }
+  ): Promise<SpeakResult>;
 
   /**
    * Say a reply that is still being generated.
@@ -63,8 +75,13 @@ export interface Transport {
    * transport owns the wire and the framing; the engine owns the model. Returns
    * what was actually spoken, which is less than what was yielded when barge-in
    * cuts the reply short.
+   *
+   * `onFirstAudio` fires when the first synthesised buffer actually reaches the
+   * wire - not when the model yields its first sentence, which is before TTS has
+   * even been asked for anything and would put a generation-time number in a
+   * latency budget judged against synthesis time.
    */
-  speakStream(sentences: AsyncIterable<string>, signal?: AbortSignal): Promise<string>;
+  speakStream(sentences: AsyncIterable<string>, signal?: AbortSignal, onFirstAudio?: () => void): Promise<string>;
 
   /**
    * A completed utterance from the customer, with mean STT word confidence.
