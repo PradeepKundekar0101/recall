@@ -21,10 +21,15 @@ import type { ApiCall } from "../lib/useCallStream";
  */
 export function ApiLogs({ calls, leadId }: { calls: ApiCall[]; leadId: string | null }) {
   const [open, setOpen] = useState<number | null>(null);
-  const endRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
+  // The pane's own body, scrolled by hand. scrollIntoView would have scrolled
+  // every scrollable ancestor as well, so each field saved during a call
+  // dragged the whole page down to the log and the transcript off the top of
+  // it - the pane pulling the screen to itself for a row nobody asked to see.
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
+    const body = bodyRef.current;
+    if (body) body.scrollTop = body.scrollHeight;
   }, [calls.length]);
 
   return (
@@ -33,7 +38,7 @@ export function ApiLogs({ calls, leadId }: { calls: ApiCall[]; leadId: string | 
         <span className="pane-title">API logs</span>
         <span className="pane-meta">{summarise(calls, leadId)}</span>
       </div>
-      <div className="pane-body">
+      <div className="pane-body" ref={bodyRef}>
         {calls.length === 0 ? (
           <p className="empty">
             Nothing saved yet. Every field is written to the CRM the moment the customer confirms it, and each
@@ -83,7 +88,6 @@ export function ApiLogs({ calls, leadId }: { calls: ApiCall[]; leadId: string | 
                 </li>
               );
             })}
-            <div ref={endRef} />
           </ol>
         )}
       </div>

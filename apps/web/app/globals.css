@@ -574,12 +574,33 @@ body::after {
 
 /* ---------- panes ---------- */
 
+/* Everything on one call below the page bar, in the column the other standing
+   views scroll in. The pane row takes the height that is going; the cards below
+   it are what they are, and when they no longer fit together this scrolls
+   rather than taking the difference out of the row. */
+.callboard {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--hairline-strong) transparent;
+}
+/* Same bound as .console-main > *, for the same reason: these are flex items
+   too, and a nowrap row inside one would otherwise widen the whole column. */
+.callboard > * { min-width: 0; }
+
 .panes {
   display: grid;
   grid-template-columns: 30fr 40fr 30fr;
   gap: 16px;
   flex: 1 1 0;
-  min-height: 0;
+  /* The row grows into a tall screen and shrinks on a short one, but never
+     below a transcript worth reading - a pane head with nothing under it is
+     worse than a scrollbar. */
+  min-height: 312px;
 }
 
 .pane {

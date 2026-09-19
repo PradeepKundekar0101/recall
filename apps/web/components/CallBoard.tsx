@@ -61,7 +61,12 @@ export function CallBoard({ callId, journey }: { callId: string; journey: Journe
   }
 
   return (
-    <>
+    // The call's own scrolling column, the same one the other standing views
+    // use. Without it every card below the pane row takes its height out of the
+    // pane row - it is the only child that flexes - and on a short screen the
+    // transcript is squeezed down to its header while the cards below it stay
+    // whole. Bounded here, the row keeps its floor and the column scrolls.
+    <div className="callboard">
       <section className="callhead" aria-label="Call">
         <div className="parties">
           <Orb status={shown} speaking={call.interim?.speaker ?? null} size={52} />
@@ -177,7 +182,7 @@ export function CallBoard({ callId, journey }: { callId: string; journey: Journe
       <CallTiming timings={call.timings} />
 
       <PayloadDrawer payload={{ lead_id: lead?.id ?? null, form }} submissions={call.submissions} />
-    </>
+    </div>
   );
 }
 
