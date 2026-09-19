@@ -73,6 +73,25 @@ const BOOLS: { input: string; expect: boolean | null }[] = [
   // depend on hearing a longer word.
   { input: "Right.", expect: true },
   { input: "right, that's it", expect: true },
+  // The common tail. The list can never be finished - the model decides what
+  // falls past it - but the words people actually say to a read-back should not
+  // cost a round trip.
+  { input: "Gotcha.", expect: true },
+  { input: "Spot on.", expect: true },
+  { input: "Perfect.", expect: true },
+  { input: "Exactly.", expect: true },
+  { input: "You got it.", expect: true },
+  { input: "Absolutely.", expect: true },
+  { input: "Of course.", expect: true },
+  { input: "Mm-hmm.", expect: true },
+  // Agreement that starts with the word "no", which the no pattern used to take
+  // at face value and clear the value on.
+  { input: "No worries.", expect: true },
+  { input: "No problem, that's the one.", expect: true },
+  // Both a yes word and a no word in one breath. Only an unambiguous agreement
+  // phrase settles it; anything else is left for the model to judge.
+  { input: "Yeah nah, that's the one.", expect: true },
+  { input: "No, spot on.", expect: true },
   { input: "maybe later", expect: null },
 ];
 
