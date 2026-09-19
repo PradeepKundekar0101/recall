@@ -57,7 +57,20 @@ export class DialogueEngine {
   private turn: AbortController | null = null;
 
   private silenceTimers: NodeJS.Timeout[] = [];
+
+  /**
+   * One line on the wire at a time.
+   *
+   * The filler is fire-and-forget on purpose - the turn continues underneath it -
+   * so the reply used to be handed to the transport while "Okay." was still
+   * playing. The transport refuses to overlap them now, but the engine is what
+   * decides the order, and the order is the thing that has to be right.
+   */
+  private playback: Promise<unknown> = Promise.resolve();
+
   private fillerTimer: NodeJS.Timeout | null = null;
+  /** False once the turn no longer needs covering, even if the filler is due. */
+  private fillerWanted = false;
   private fillerIndex = 0;
   private nudges = 0;
   private finalised = false;
@@ -87,7 +100,12 @@ export class DialogueEngine {
     journey: Journey,
     lead: Lead,
     private transport: Transport,
-    private hooks: EngineHooks
+    private hooks: EngineHooks,
+    /**
+     * Injected by `pnpm dialogue:check`, which needs an extraction it can slow
+     * down: the filler exists only to cover a slow one.
+     */
+    private extractor: typeof extract = extract
   ) {
     this.state = new JourneyState(callId, journey, lead);
 
@@ -316,7 +334,7 @@ export class DialogueEngine {
     const [extraction, readings] = await Promise.all([
       resolvableInCode
         ? Promise.resolve({ accepted: [], rejected: [], intent: "answer" as const, ms: 0 })
-        : extract({
+        : this.extractor({
             journey: this.state.journey,
             form: this.state.form,
             utterance: text,
@@ -894,26 +912,32 @@ export class DialogueEngine {
       // Keeping the model out of the speech path also takes it off the critical
       // path entirely: a turn now costs one extraction call, not two round trips.
       if (!opts.generate || env.mockVoice) {
-        const line = this.state.say("agent", text, null);
-        this.hooks.onAgentLine(text);
-        const result = await this.transport.speak(text, {
-          interruptible: opts.interruptible,
-          onFirstAudio: opts.onFirstAudio,
+        // The transcript is written inside the queue, so it reads in the order
+        // the customer heard it rather than the order the engine decided it.
+        return await this.onTheWire(async () => {
+          const line = this.state.say("agent", text, null);
+          this.hooks.onAgentLine(text);
+          const result = await this.transport.speak(text, {
+            interruptible: opts.interruptible,
+            onFirstAudio: opts.onFirstAudio,
+          });
+          // The record keeps what was heard, not what was scripted.
+          if (!result.completed) this.state.cut(line, result.heard);
+          return result;
         });
-        // The record keeps what was heard, not what was scripted.
-        if (!result.completed) this.state.cut(line, result.heard);
-        return result;
       }
 
-      const spoken = await this.transport.speakStream(
-        streamSentences({
-          system:
-            "You are a concise Australian call-centre assistant. Say the given line in one or two short " +
-            "sentences. Never give advice, never invent details, never ask for information you were not given.",
-          messages: [{ role: "user", content: text }],
-          signal: controller.signal,
-        }),
-        controller.signal
+      const spoken = await this.onTheWire(() =>
+        this.transport.speakStream(
+          streamSentences({
+            system:
+              "You are a concise Australian call-centre assistant. Say the given line in one or two short " +
+              "sentences. Never give advice, never invent details, never ask for information you were not given.",
+            messages: [{ role: "user", content: text }],
+            signal: controller.signal,
+          }),
+          controller.signal
+        )
       );
       if (!controller.signal.aborted) {
         this.state.say("agent", spoken || text, null);
@@ -923,6 +947,16 @@ export class DialogueEngine {
     } finally {
       if (this.turn === controller) this.turn = null;
     }
+  }
+
+  /** Waits for whatever is playing, then runs `fn`. Never wedges on a rejection. */
+  private onTheWire<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.playback.then(fn, fn);
+    this.playback = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
   }
 
   /** Barge-in and handoff both land here: kill the LLM stream and the TTS socket. */
@@ -952,16 +986,24 @@ export class DialogueEngine {
    */
   private armFiller(): void {
     this.clearFiller();
+    this.fillerWanted = true;
     this.fillerTimer = setTimeout(() => {
-      if (this.finalised || this.detector.hasFired) return;
-      const filler = JourneyState.FILLERS[this.fillerIndex % JourneyState.FILLERS.length] as string;
-      this.fillerIndex++;
-      void this.transport.speak(filler).catch(() => undefined);
-      this.hooks.onAgentLine(filler);
+      this.fillerTimer = null;
+      void this.onTheWire(async () => {
+        // Checked here rather than when the timer fires: by the time the wire is
+        // free the reply may already be composed, and a filler then adds chatter
+        // and delay instead of covering a pause.
+        if (!this.fillerWanted || this.finalised || this.detector.hasFired) return;
+        const filler = JourneyState.FILLERS[this.fillerIndex % JourneyState.FILLERS.length] as string;
+        this.fillerIndex++;
+        this.hooks.onAgentLine(filler);
+        await this.transport.speak(filler);
+      }).catch(() => undefined);
     }, env.fillerAfterMs);
   }
 
   private clearFiller(): void {
+    this.fillerWanted = false;
     if (this.fillerTimer) clearTimeout(this.fillerTimer);
     this.fillerTimer = null;
   }
@@ -1115,6 +1157,7 @@ export function createEngine(opts: {
   lead: Lead;
   transport: Transport;
   hooks: EngineHooks;
+  extract?: typeof extract;
 }): DialogueEngine {
-  return new DialogueEngine(opts.callId, opts.journey, opts.lead, opts.transport, opts.hooks);
+  return new DialogueEngine(opts.callId, opts.journey, opts.lead, opts.transport, opts.hooks, opts.extract);
 }

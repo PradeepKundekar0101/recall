@@ -35,6 +35,7 @@ process.env.ANSWER_REACTION_MS = "0";
 process.env.SANDBOX_URL = "http://127.0.0.1:9";
 
 const { createEngine } = await import("./dialogue.js");
+const { env } = await import("../env.js");
 const { loadJourney } = await import("../journey/index.js");
 const { log } = await import("../log.js");
 
@@ -190,10 +191,19 @@ function hooks(captured: Captured) {
   };
 }
 
-function scenario(id: string, prefill: Record<string, FieldValue>) {
+type Deps = { extract?: Parameters<typeof createEngine>[0]["extract"] };
+
+function scenario(id: string, prefill: Record<string, FieldValue>, deps: Deps = {}) {
   const captured: Captured = { signals: [], handoff: null };
   const line = new FakeLine(id);
-  const engine = createEngine({ callId: id, journey, lead: lead(prefill), transport: line, hooks: hooks(captured) });
+  const engine = createEngine({
+    callId: id,
+    journey,
+    lead: lead(prefill),
+    transport: line,
+    hooks: hooks(captured),
+    ...deps,
+  });
   return { line, engine, captured };
 }
 
@@ -457,6 +467,44 @@ console.log("\n-- an aside that cuts a question off gets the question asked agai
   check("no attempt is charged for the aside", engine.state.form.get("fuel_type")?.attempts === 1, `attempts=${engine.state.form.get("fuel_type")?.attempts}`);
   const agentLines = engine.state.transcript.filter((t) => t.speaker === "agent").map((t) => t.text).slice(-2);
   check("the transcript records what was heard, not what was cut off", /automated assistant/i.test(agentLines[0] ?? "") && /electricity, gas, or both/i.test(agentLines[1] ?? ""), agentLines.join(" | "));
+  check("no line overlapped another", line.overlaps === 0, `${line.overlaps} overlap(s)`);
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- the filler and the reply behind it do not talk over each other");
+{
+  // The filler covers a slow extraction and is deliberately not awaited, so the
+  // turn continues underneath it. The reply was therefore handed to the transport
+  // while "Okay." was still playing, and both went out at once.
+  const { line, engine } = scenario("filler", THROUGH_SUPPLY, {
+    extract: async () => {
+      // Slow enough for the filler to be due, quick enough to land while it plays.
+      await sleep(60);
+      return { accepted: [], rejected: [], intent: "unclear" as const, ms: 60 };
+    },
+  });
+  await engine.begin();
+  for (let i = 0; i < 10; i++) {
+    line.say("Yes.");
+    await line.settle();
+  }
+  check("the walk reaches the fuel type question", /electricity, gas, or both/i.test(line.last()), line.last());
+
+  // Now lines take time to play, and the filler is due before extraction lands.
+  line.speakMs = 100;
+  const fillerAfter = env.fillerAfterMs;
+  env.fillerAfterMs = 40;
+  const before = line.spoken.length;
+  line.say("Uh, twenty minutes.", 0.3);
+  await line.settle(220);
+  env.fillerAfterMs = fillerAfter;
+
+  const since = line.spoken.slice(before);
+  const fillerAt = since.findIndex((l) => /^(Got it|Right|Okay|Thanks)\.$/.test(l));
+  const reaskAt = since.findIndex((l) => /sorry - electricity, gas, or both/i.test(l));
+  check("the filler covers the slow extraction", fillerAt >= 0, since.join(" | "));
+  check("the reply follows it rather than landing on top of it", reaskAt > fillerAt, since.join(" | "));
   check("no line overlapped another", line.overlaps === 0, `${line.overlaps} overlap(s)`);
   await engine.finalise("incomplete");
 }
