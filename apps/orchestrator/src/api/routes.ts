@@ -10,6 +10,7 @@ import { addToDnc, canDial, dncList, optOutList, onDncRegister } from "../policy
 import { liveTwilioTransports, escapeXml } from "../transports/twilio.js";
 import { latencyMedian } from "../voice/llm.js";
 import { startCall, getCall } from "../calls.js";
+import { DialogueEngine } from "../engine/dialogue.js";
 import { cachedLineCount } from "../voice/tts.js";
 import { Readable } from "node:stream";
 import type { CallEvent, CallSummary } from "@recall/shared";
@@ -136,6 +137,28 @@ api.post("/calls/:callId/hangup", async (req, res) => {
   const call = getCall(req.params.callId);
   if (!call) return res.status(404).json({ error: "no such live call" });
   await call.finish("incomplete");
+  res.json({ ok: true });
+});
+
+/**
+ * Pull a handoff back, at the operator's request.
+ *
+ * The window is the bridging line - it plays to the end before the redirect
+ * goes out, and it is uninterruptible, so there are several seconds in which
+ * this can still be answered. After that the `<Connect><Stream>` has been torn
+ * down by the redirect and there is no line left to resume on, which is a 409
+ * and an honest sentence rather than a silent no-op.
+ */
+api.post("/calls/:callId/handoff/cancel", (req, res) => {
+  const call = getCall(req.params.callId);
+  if (!call) return res.status(404).json({ error: "no such live call" });
+  if (!(call.engine instanceof DialogueEngine)) {
+    return res.status(400).json({ error: "this call is not running the journey engine" });
+  }
+
+  const result = call.engine.cancelHandoff();
+  if (!result.ok) return res.status(409).json({ error: result.reason });
+  log.call(call.callId, "operator cancelled the handoff");
   res.json({ ok: true });
 });
 

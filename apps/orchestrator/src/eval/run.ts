@@ -121,6 +121,7 @@ async function main(): Promise<void> {
         onSubmit: () => {},
         persistField: () => {},
         onTranscriptDropped: () => {},
+        onHandoffCancelled: () => {},
         onTurnTiming: () => {},
       },
     });

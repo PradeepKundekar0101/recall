@@ -722,6 +722,19 @@ body::after {
 .tag-guardrail { background: var(--error-tint); color: var(--error); }
 .tag-dropped { background: var(--hairline-soft); color: var(--muted); }
 
+/* Taking a handoff back. Sits inside the banner because that is where the
+   operator is already looking when they decide the escalation was wrong, and
+   the window to decide it is only as long as the bridging line. */
+.handoff-undo {
+  margin-top: 10px;
+  background: var(--surface);
+}
+.banner-refused {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 /* A transcript the engine refused. Struck out and greyed, because it is on the
    record that it was heard and on the record that it was not acted on - both
    halves matter when the question from the back of the room is "why did it

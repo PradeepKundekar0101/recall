@@ -185,6 +185,8 @@ export function CallBoard({ callId, journey }: { callId: string; journey: Journe
               handoff={call.handoff}
               section={call.section}
               askingField={call.askingField}
+              callId={callId}
+              live={!over}
             />
           </div>
         </section>

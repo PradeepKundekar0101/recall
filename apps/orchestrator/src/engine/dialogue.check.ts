@@ -216,7 +216,13 @@ function lead(prefill: Record<string, FieldValue>): Lead {
 }
 
 type Dropped = { text: string; reason: string; confidence: number | null };
-type Captured = { signals: SignalReading[]; handoff: string | null; timings: TurnTiming[]; dropped: Dropped[] };
+type Captured = {
+  signals: SignalReading[];
+  handoff: string | null;
+  timings: TurnTiming[];
+  dropped: Dropped[];
+  cancelled: string | null;
+};
 
 function hooks(captured: Captured) {
   return {
@@ -235,6 +241,10 @@ function hooks(captured: Captured) {
     persistField: () => {},
     onTranscriptDropped: (text: string, reason: string, confidence: number | null) =>
       captured.dropped.push({ text, reason, confidence }),
+    onHandoffCancelled: (reason: string) => {
+      captured.handoff = null;
+      captured.cancelled = reason;
+    },
     onTurnTiming: (timing: TurnTiming) => captured.timings.push(timing),
   };
 }
@@ -242,7 +252,7 @@ function hooks(captured: Captured) {
 type Deps = { extract?: Parameters<typeof createEngine>[0]["extract"] };
 
 function scenario(id: string, prefill: Record<string, FieldValue>, deps: Deps = {}) {
-  const captured: Captured = { signals: [], handoff: null, timings: [], dropped: [] };
+  const captured: Captured = { signals: [], handoff: null, timings: [], dropped: [], cancelled: null };
   const line = new FakeLine(id);
   const engine = createEngine({
     callId: id,
@@ -1259,6 +1269,147 @@ console.log("\n-- how long the tail has to be, in arithmetic rather than opinion
     lastSentenceEcho(liveEnv.sttSilenceMs + 500) === "echo",
     `tail ${liveEnv.sttSilenceMs + 500} -> ${lastSentenceEcho(liveEnv.sttSilenceMs + 500)}`
   );
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- call 17552735: correcting a year is not reading out a card");
+{
+  /**
+   * Daniel, L-1043, 19 Sep. Asked to confirm "Daniel Okafor, 22nd of November,
+   * 1976", he said:
+   *
+   *     "Uh, yes, it is right, but, uh, it's 1987, not 8-- 1986."
+   *
+   * The call was handed to a human four seconds later for SENSITIVE - "long
+   * digit run" - with nothing captured and 0 of 15 hands-free. The detector had
+   * counted nine digits scattered across that sentence as one card number.
+   *
+   * The unit of that is in `pnpm escalation:check`; this is the same sentence
+   * through a whole turn, because the thing that matters to the customer is not
+   * that a regex changed but that the call carried on.
+   */
+  const { line, engine, captured } = scenario("date-correction", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+  check("the walk reaches the identity read-back", /is that right/i.test(line.last()), line.last());
+
+  line.say("Uh, yes, it is right, but, uh, it's 1987, not 8-- 1986.", 0.82);
+  await line.settle();
+
+  check("the call is not handed to a human", captured.handoff === null, String(captured.handoff));
+  check(
+    "SENSITIVE never fires",
+    !captured.signals.some((s) => s.signal === "SENSITIVE" && s.fired),
+    JSON.stringify(captured.signals.filter((s) => s.fired))
+  );
+  check("nobody is dialled", line.transferredTo === null, String(line.transferredTo));
+  check(
+    "and the year is not redacted out of the transcript",
+    engine.state.transcript.some((t) => t.speaker === "customer" && /1987/.test(t.text)),
+    JSON.stringify(engine.state.transcript.slice(-2).map((t) => t.text))
+  );
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- taking the call back from a handoff");
+{
+  /**
+   * Call 17552735 handed Daniel to a human for correcting his year of birth.
+   * The detector bug behind it is fixed in `pnpm escalation:check`, but a
+   * detector that can fire at all can fire wrongly, and the operator is sitting
+   * in front of the console watching it happen with no way to say no.
+   *
+   * The window is real: the bridging line is uninterruptible, so it plays to
+   * the end before the redirect goes out.
+   */
+  const { line, engine, captured } = scenario("handoff-cancel", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+  const question = line.last();
+  check("the walk reaches a question", /is that right/i.test(question), question);
+
+  // The line takes time to play, which is what gives the operator the window.
+  line.speakMs = 200;
+  const handingOff = engine.handoff("SENSITIVE", "long digit run");
+  await until(() => captured.handoff !== null);
+  check("the handoff is announced to the console", captured.handoff === "SENSITIVE", String(captured.handoff));
+
+  const cancelled = engine.cancelHandoff();
+  check("the operator can cancel while the bridging line plays", cancelled.ok, cancelled.reason);
+
+  await handingOff;
+  await line.settle();
+
+  check("nobody is dialled", line.transferredTo === null, String(line.transferredTo));
+  check("the call is not finalised", engine.state.outcome === null, String(engine.state.outcome));
+  check("the console is told it was cancelled", captured.cancelled === "SENSITIVE", String(captured.cancelled));
+  check(
+    "the customer is told, in the agent's own words",
+    line.spoken.some((l) => /no need to pass you over/i.test(l)),
+    JSON.stringify(line.spoken.slice(-3))
+  );
+  // By position, not by `last()`: this harness nudges after 400 ms of quiet, so
+  // the last thing said is "Sorry, are you still there?" on any scenario that
+  // settles. What matters is that the question followed the apology.
+  const apologyAt = line.spoken.findIndex((l) => /no need to pass you over/i.test(l));
+  check(
+    "and the question they were on is asked again, right after it",
+    apologyAt >= 0 && line.spoken[apologyAt + 1] === question,
+    JSON.stringify(line.spoken.slice(apologyAt, apologyAt + 2))
+  );
+
+  // The attempt count is the thing that would undo the cancel: this field was
+  // very likely one attempt from CONFUSION, which is how it got here.
+  const attemptsAfter = engine.state.form.get("full_name")?.attempts ?? 0;
+  check("re-asking costs no attempt", attemptsAfter <= 1, `${attemptsAfter} attempts`);
+
+  // And the call really does carry on: the next answer has to land.
+  line.speakMs = 0;
+  line.say("Yes.");
+  await line.settle();
+  check(
+    "the customer's next answer is heard",
+    engine.state.form.get("full_name")?.state === "confirmed",
+    String(engine.state.form.get("full_name")?.state)
+  );
+
+  await engine.finalise("incomplete");
+}
+
+{
+  // Once the redirect is placed the media stream is gone and the engine has
+  // finalised. Saying so is better than a button that silently does nothing.
+  const { line, engine, captured } = scenario("handoff-too-late", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+
+  await engine.handoff("ASKS", "can I speak to a person");
+  check("the transfer went out", line.transferredTo !== null, String(line.transferredTo));
+
+  const cancelled = engine.cancelHandoff();
+  check("cancelling after the transfer is refused", !cancelled.ok, cancelled.reason);
+  check(
+    "and it says why, rather than failing silently",
+    /already placed|already ended/i.test(cancelled.reason),
+    cancelled.reason
+  );
+  check("the handoff still stands on the console", captured.cancelled === null, String(captured.cancelled));
+}
+
+{
+  // A call nobody is handing off has nothing to cancel.
+  const { line, engine } = scenario("handoff-not-happening", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+  const cancelled = engine.cancelHandoff();
+  check("cancelling an ordinary call is refused", !cancelled.ok, cancelled.reason);
+  await engine.finalise("incomplete");
 }
 
 console.log(failures ? `\n${failures} failure(s).` : "\nAll dialogue checks pass.");

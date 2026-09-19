@@ -87,6 +87,8 @@ export type EngineHooks = {
    * difference visible on the console.
    */
   onTranscriptDropped: (text: string, reason: DropReason, confidence: number | null) => void;
+  /** The operator pulled a handoff back before the line changed hands. */
+  onHandoffCancelled: (reason: EscalationSignal) => void;
   /** One turn's measured stages. Not emitted for a turn that never reached the wire. */
   onTurnTiming: (timing: TurnTiming) => void;
 };
@@ -150,6 +152,18 @@ export class DialogueEngine {
    * first section could ever be introduced.
    */
   private introducedSection: string | null = null;
+  /**
+   * The operator asked for the handoff back, and whether it is still theirs to ask for.
+   *
+   * There is a real window here - the bridging line plays to the end before the
+   * redirect goes out, and it is uninterruptible, so it is several seconds long.
+   * `handoffCommitted` closes the window at the moment the redirect is handed to
+   * Twilio, because from there the media stream is torn down and the engine has
+   * finalised: there is no line left to resume on.
+   */
+  private handoffCancelled = false;
+  private handoffCommitted = false;
+
   /** A committed transcript that stopped mid-thought, waiting for the rest. */
   private fragment: { text: string; confidence: number | null; startedAt: number | null; suspect: boolean } | null =
     null;
@@ -1288,6 +1302,13 @@ export class DialogueEngine {
   async handoff(reason: EscalationSignal, evidence: string): Promise<void> {
     if (this.finalised || this.state.phase === "handoff") return;
     this.cancelTurn("handoff");
+    // The bridging line is about five seconds of uninterruptible speech, and
+    // the silence clock was still running underneath it - so "Sorry, are you
+    // still there?" could land on top of "I'm going to get a colleague". It was
+    // invisible while a handoff always ended the call a moment later; now that
+    // one can be pulled back, the clock has to stop here and be restarted by
+    // whatever resumes.
+    this.clearSilence();
     this.state.phase = "handoff";
     this.state.handoffReason = reason;
     // Everything confirmed is already saved; this is the backstop before the line
@@ -1299,6 +1320,11 @@ export class DialogueEngine {
     // Heard whole. Cut short by a customer still finishing their sentence, it
     // left them with "I'm going to" and then a transfer they had no warning of.
     await this.speak(this.state.journey.scripts.handoff_bridge, { interruptible: false });
+
+    // The operator's window. It closes here, on the last statement before the
+    // redirect, because everything after this point belongs to Twilio.
+    if (this.handoffCancelled) return this.resumeFromHandoff(reason);
+    this.handoffCommitted = true;
 
     if (env.handoffNumber) {
       try {
@@ -1313,6 +1339,54 @@ export class DialogueEngine {
       }
     }
     await this.finalise("handoff");
+  }
+
+  /**
+   * Take the call back from the handoff, at the operator's request.
+   *
+   * Synchronous and cheap on purpose: it records the intent and returns, and
+   * `handoff()` acts on it at the one point where acting on it is safe. Trying
+   * to unwind the transfer from here would race the bridging line that is still
+   * playing.
+   */
+  cancelHandoff(): { ok: boolean; reason: string } {
+    if (this.finalised) return { ok: false, reason: "the call has already ended" };
+    if (this.state.phase !== "handoff") return { ok: false, reason: "this call is not being handed off" };
+    if (this.handoffCommitted) {
+      // Honest rather than optimistic. Once the redirect is placed the
+      // <Connect><Stream> is gone, the engine has finalised, and reviving the
+      // voice loop behind a <Dial> is a rebuild, not a cancellation.
+      return { ok: false, reason: "the transfer is already placed - the colleague's phone is ringing" };
+    }
+    this.handoffCancelled = true;
+    log.call(this.callId, "handoff cancelled by the operator - resuming with the agent");
+    return { ok: true, reason: "" };
+  }
+
+  /** Put the customer back with the agent, on the question they were on. */
+  private async resumeFromHandoff(reason: EscalationSignal): Promise<void> {
+    this.handoffCancelled = false;
+    this.state.handoffReason = null;
+    // Otherwise the next turn is refused by the `hasFired` guard on every path
+    // into the engine, and the call sits mute until the abandon timer.
+    this.detector.reset();
+    this.state.phase = this.state.consent ? "section" : "consent";
+    this.hooks.onHandoffCancelled(reason);
+
+    await this.speak(this.state.journey.scripts.handoff_cancelled);
+
+    // The question again, word for word, and at no cost to the attempt count.
+    // Re-asking through askField() would charge an attempt, and the field is
+    // very often already one attempt from the CONFUSION that caused this - so
+    // the cancel would be undone by the turn after it.
+    if (this.lastQuestion) await this.askLine(this.lastQuestion);
+    else if (!this.state.consent) await this.askLine(this.state.render(this.state.journey.scripts.opener));
+    else await this.askNext();
+
+    // Nothing else will: this did not run inside handleTurn, so the nudges that
+    // normally restart in its `finally` never do. Without this the resumed call
+    // would wait for an answer forever and never close itself.
+    if (!this.finalised) this.armSilence();
   }
 
   // ------------------------------------------------------------------ speech

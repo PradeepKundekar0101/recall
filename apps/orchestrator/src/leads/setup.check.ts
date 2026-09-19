@@ -247,6 +247,7 @@ class Line implements Transport {
       onSubmit: noop,
       persistField: noop,
       onTranscriptDropped: noop,
+      onHandoffCancelled: noop,
       onTurnTiming: noop,
     },
   });

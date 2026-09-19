@@ -79,6 +79,15 @@ export type CallEvent =
       fired: boolean;
     })
   | (Base & { type: "escalation.handoff"; reason: EscalationSignal; packet: HandoffPacket })
+  /**
+   * The operator pulled a handoff back before the line changed hands.
+   *
+   * A separate event rather than a second `call.status`, because the console has
+   * to clear the handoff packet it is already showing - and because "this call
+   * was escalated and then un-escalated by a person" is exactly the kind of
+   * thing the audit trail should carry in its own right.
+   */
+  | (Base & { type: "escalation.cancelled"; reason: EscalationSignal })
   | (Base & { type: "guardrail.trigger"; guardrail: GuardrailId; detail: string })
   /**
    * One request to the receiving system, with what was sent and what came back.

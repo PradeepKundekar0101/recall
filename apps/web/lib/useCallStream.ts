@@ -252,6 +252,11 @@ function reduce(prev: CallState, event: CallEvent): CallState {
     case "escalation.handoff":
       return { ...prev, handoff: { reason: event.reason, packet: event.packet }, status: "handoff" };
 
+    // The operator took it back. The banner goes with it - the call.status that
+    // follows puts the board back to `live`.
+    case "escalation.cancelled":
+      return { ...prev, handoff: null };
+
     case "transcript.dropped":
       return {
         ...prev,

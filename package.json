@@ -20,6 +20,7 @@
     "llm:check": "pnpm --filter orchestrator llm:check",
     "normalise:check": "pnpm --filter orchestrator normalise:check",
     "dialogue:check": "pnpm --filter orchestrator dialogue:check",
+    "escalation:check": "pnpm --filter orchestrator escalation:check",
     "tts:check": "pnpm --filter orchestrator tts:check",
     "usage:check": "pnpm --filter orchestrator usage:check",
     "transport:check": "pnpm --filter orchestrator transport:check",
