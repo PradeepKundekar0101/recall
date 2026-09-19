@@ -48,9 +48,9 @@ Trust that field rather than the 201.
 | `pnpm voice:check` | Synthesises a phrase and feeds it back through Scribe. Needs `MOCK_VOICE=0` |
 | `pnpm llm:check` | Structured extraction and streaming, with warm latency medians |
 | `pnpm normalise:check` | Dates, digits, emails, enums, and how each value is read back. Milliseconds, no network |
-| `pnpm dialogue:check` | The engine's turn logic against a fake line: prefilled values confirmed rather than asked, the second attempt heard before CONFUSION fires, nudges held while the customer talks, a yes said over the previous line not confirming the next, two finals a breath apart asking once, and a question that was talked over asked again. No vendors |
+| `pnpm dialogue:check` | The engine's turn logic against a fake line: prefilled values confirmed rather than asked, the second attempt heard before CONFUSION fires, nudges held while the customer talks, a yes said over the previous line not confirming the next, two finals a breath apart asking once, a question that was talked over asked again, and a reply queued behind the filler rather than on top of it. No vendors |
 | `pnpm tts:check` | mulaw round-trip and loudness levelling. Milliseconds, no network |
-| `pnpm transport:check` | The Twilio transport against a fake Twilio and a fake media stream: dial, handshake, transfer, the hangup that must not follow it, the answering-machine verdict that must not end a live call, and talking over the agent - a backchannel that must not stop the line, a turn-taker that must, and what was heard when it did. Rings nothing |
+| `pnpm transport:check` | The Twilio transport against a fake Twilio and a fake media stream: dial, handshake, transfer, the hangup that must not follow it, the answering-machine verdict that must not end a live call, talking over the agent - a backchannel that must not stop the line, a turn-taker that must, and what was heard when it did - and two lines handed over at once, which must not overlap. Rings nothing |
 | `pnpm eval` | Ten simulator personas end to end |
 | `pnpm voice:calibrate` | Confidence distribution, clean vs degraded |
 | `pnpm voice:replay <wav>` | A Twilio recording back through the live STT socket, paced like the media stream. Separates a bad line from a bad transcriber |
@@ -160,10 +160,14 @@ Barge-in fired on any two tokens, so "yeah okay" over a read-back cleared playba
 Backchannels still reach the engine as utterances; they just do not stop the line.
 All four of the above are covered by `pnpm dialogue:check` and `pnpm transport:check`.
 
-**The filler still plays on its own socket write.**
-`armFiller()` fires `transport.speak()` without waiting for it, so a reply that lands while "Okay." is still playing overlaps it, and the filler's mark then clears `speaking` while the reply is still on the wire, which switches barge-in off for the rest of that reply.
-Not fixed: the check harness has no way to slow extraction down, so there is no test to write first.
-The seam it needs is an injectable extractor on `createEngine()`.
+**Two lines could be on the wire at once, and the filler put them there.**
+`armFiller()` fires `transport.speak()` without waiting for it, by design - the turn continues underneath it - so a reply that landed while "Okay." was still playing went out on top of it.
+The audio is the obvious half.
+The quiet half is that `speaking`, `lastSpokenTokens` and the mark resolvers all describe *one* utterance: the filler's mark cleared `speaking` while the reply was still on the wire, so barge-in was off for the rest of that reply and the reply reported itself as cut when it had been heard whole.
+Both layers now serialise.
+The engine queues every line it speaks, fillers included, because it is what decides the order; the transport queues too, because callers are not trusted to and it owns the wire.
+A filler that is no longer needed by the time the wire is free is dropped rather than played late, so serialising does not cost a turn the 400 ms it was meant to hide.
+`createEngine()` takes an injectable extractor, which is what lets `dialogue:check` slow extraction down enough for the filler to be due; `transport:check` drives two lines onto one wire directly.
 
 **Never run a transport check without the injected client.**
 The first draft of `transport:check` reached the real Twilio SDK and rang the test handset.
