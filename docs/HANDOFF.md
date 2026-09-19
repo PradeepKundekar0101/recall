@@ -1,8 +1,9 @@
 # RECALL - session handoff
 
 Written 19 Sep 2026, after the first successful live phone call.
-Updated the same night, after the first and second journey calls over a real phone, and again the next morning after the third and fourth.
+Updated the same night, after the first and second journey calls over a real phone, and again the next morning after the third and fourth, and again after the fifth.
 Next task: **run the Energy journey over a real call again, and let the handoff ring the second handset.**
+The fifth call is the one to read first if the handoff is what you are working on: it reached the transfer, and the transfer cut the customer off.
 
 ## Where things stand
 
@@ -14,11 +15,12 @@ The full journey works in simulation against live models: a cooperative call sub
 That was 13 of 15 until a customer restating a prefilled value stopped counting as hands-free; the field came from the web journey, so it should not have.
 All ten eval personas pass (gate is 9/10), though the suite is not fully deterministic - see Known flakiness.
 
-**The journey has now been run over a real phone four times.**
+**The journey has now been run over a real phone five times.**
 The first call (3f927a21, 01:55 IST) failed on a line full of static and handed off with nothing captured.
 The second (35fbec5a, 02:47 IST) ran cleanly through name, date of birth, account holder, phone and a corrected email, then fell over at the street address and "got cut" when the handoff fired.
 The third and fourth (07:50 and 07:52 IST) were both cut about eight seconds in by Twilio's answering-machine detection, mid-answer.
-All four are dissected below, and every defect they exposed is fixed and checked.
+The fifth (bd82d644, 11:27 IST) got as far as the warm handoff and then cut the customer off one second into it, after asking the same question twice and escalating on a customer who had answered.
+All five are dissected below, and every defect they exposed is fixed and checked.
 The warm transfer has still never rung the second handset; that is the next thing to see.
 
 ## Run it
@@ -44,6 +46,10 @@ Trust that field rather than the 201.
 The console reaches the same endpoint in three steps: pick the customer, seed or clear each field and write the agent a brief, then Dial.
 The body may also carry `prefill` (a value seeds a field so it is confirmed in one line, `null` removes it so it is asked) and `agent_brief` (how the agent should talk; it shapes generated lines only, never the scripts).
 Both are parsed in `leads/setup.ts` and refused whole on any bad value, and neither can touch the number that is dialled.
+Every call has its own page at `/calls/<call id>`; Dial lands there, and so does opening a call from `/calls`, the history.
+`GET /calls` lists every call the audit table and the orchestrator's own buffer know about, and `GET /calls/:id/events` replays a finished call out of `call_events` when this process never ran it, closing the stream after the final status.
+`GET /calls/:id/recording` streams the Twilio audio through with the account's credentials; Twilio's recording callback used to reach a transport that had already gone, so the url is now kept in the audit row and announced as a `call.recording` event, and the transcript pane shows a player once it lands.
+The engine announces every prefilled field before the opener; until it did, the board showed the lead's own prefill - and anything seeded - as empty until confirmed.
 
 | Command | What it proves |
 | --- | --- |
@@ -51,10 +57,10 @@ Both are parsed in `leads/setup.ts` and refused whole on any bad value, and neit
 | `pnpm voice:check` | Synthesises a phrase and feeds it back through Scribe. Needs `MOCK_VOICE=0` |
 | `pnpm llm:check` | Structured extraction and streaming, with warm latency medians |
 | `pnpm normalise:check` | Dates, digits, emails, enums, and how each value is read back. Milliseconds, no network |
-| `pnpm dialogue:check` | The engine's turn logic against a fake line: prefilled values confirmed rather than asked, the second attempt heard before CONFUSION fires, nudges held while the customer talks, a yes said over the previous line not confirming the next, two finals a breath apart asking once, a question that was talked over asked again, and a reply queued behind the filler rather than on top of it. No vendors |
-| `pnpm setup:check` | What the console sends before a dial: seeds and removals folded into the lead, bad fields and briefs refused whole, the dial target untouched, and the brief fenced inside the voice prompt. Milliseconds, no network |
+| `pnpm dialogue:check` | The engine's turn logic against a fake line: prefilled values confirmed rather than asked, the second attempt heard before CONFUSION fires, nudges held while the customer talks, a yes said over the previous line not confirming the next, two finals a breath apart asking once, a question that was talked over asked again, a reply queued behind the filler rather than on top of it, a field the form has no value for asked outright rather than confirmed at nothing, and a yes outranking the model's guess at intent. No vendors |
+| `pnpm setup:check` | What the console sends before a dial: seeds and removals folded into the lead, bad fields and briefs refused whole, the dial target untouched, the brief fenced inside the voice prompt, and every fixture carrying the number it will be rung on. Milliseconds, no network |
 | `pnpm tts:check` | mulaw round-trip and loudness levelling. Milliseconds, no network |
-| `pnpm transport:check` | The Twilio transport against a fake Twilio and a fake media stream: dial, handshake, transfer, the hangup that must not follow it, the answering-machine verdict that must not end a live call, talking over the agent - a backchannel that must not stop the line, a turn-taker that must, and what was heard when it did - and two lines handed over at once, which must not overlap. Rings nothing |
+| `pnpm transport:check` | The Twilio transport against a fake Twilio and a fake media stream: dial, handshake, transfer, the hangup that must not follow it, the answering-machine verdict that must not end a live call, talking over the agent - a backchannel that must not stop the line, a turn-taker that must, and what was heard when it did - two lines handed over at once, which must not overlap, and the media stream torn down by the redirect, which must not be read as the customer hanging up. Rings nothing |
 | `pnpm eval` | Ten simulator personas end to end |
 | `pnpm voice:calibrate` | Confidence distribution, clean vs degraded |
 | `pnpm voice:replay <wav>` | A Twilio recording back through the live STT socket, paced like the media stream. Separates a bad line from a bad transcriber |
@@ -133,6 +139,17 @@ Spacing every digit run before synthesis turned the year in every date read-back
 Every transfer was therefore refused, the fallback hung up, and the customer heard the call cut.
 `assertHandoffNumber()` now allows the configured handset and refuses the customer's own number.
 And `finalise()` calls `hangup()` after `transfer()`, which would complete the call before the Dial had rung anyone; the transport ignores a hangup once it has transferred.
+
+**Redirecting a call tears its media stream down, and that is not the customer hanging up.**
+The `<Connect><Stream>` ends the moment the `<Dial>` redirect is applied, which is while the REST update is still in flight.
+Anything that reads that teardown as a hangup will finalise the call and complete the leg that is ringing the human, one second after the transfer.
+Read the fifth journey call before touching `transfer()`.
+The other half of the same rule: closing our end of the socket is itself a way to end a `<Connect>` call, so once the call has been handed over the teardown is Twilio's to do, not ours.
+
+**A closed field's ask can be a confirmation, and then it is useless without a value.**
+"Is this number the best one to reach you on?" is the whole question for `phone`, and a yes only means something if the form is already holding a number.
+Two of the three lead fixtures carried none, and the console can clear any field deliberately, so both states have to work: `prefilled` carries the confirmation, `ask` has to stand on its own.
+The journey schema now refuses a closed field that is not bool or enum and has no `prefilled` script, so this cannot come back in JSON.
 
 **Twilio's answering-machine detection hangs up on live customers.**
 `machineDetection: "Enable"` with `asyncAmd` posts a verdict while the call is already in progress, and the webhook used to end the call on `machine_start`.
@@ -272,6 +289,65 @@ The chain was `/twilio/amd/:callId` -> `notifyVoicemail()` -> `end("voicemail")`
 AMD is advisory now - see Gotchas.
 The other short calls in that session show no AMD hangup and no orchestrator update; they look like redials and hangups from this end, so watch for them separately if a call still cuts.
 
+## The fifth journey call
+
+Call `bd82d644`, 19 Sep 11:27 IST, 78 seconds, lead L-1043 (Daniel).
+The best call so far and the worst ending: consent, name, date of birth and account holder all closed on one word each, and then the contact section asked the same question twice, escalated a customer who had answered it, and cut them off on the way to the human.
+
+What the customer heard, from 58:28:
+
+```
+Agent     Is this number the best one to reach you on?
+Daniel    Yeah.
+Agent     Is this number the best one to reach you on?
+Daniel    Oh, yes, it is.
+Agent     Got it.
+Agent     I'm going to get a colleague to help you with this - one moment, they'll have everything you've told me so far.
+                                                      (line dead, one second later)
+```
+
+Three separate defects, each fixed and checked.
+
+**The number was never in the form, and the question was phrased as though it were.**
+`phone` is a closed field whose script is a confirmation: "is this number the best one to reach you on?".
+That only works when the form already holds a number, and the engine only treats it as a confirmation when it does - otherwise it speaks the same line as an ordinary question.
+L-1043 carried no phone in its prefill, so the customer was asked to confirm nothing, and no answer could ever fill the field: a yes carries no number, and the closed-field shortcut in `decide()` only reads bool and enum.
+Every answer failed, the attempts ran past `max_attempts`, and `askField()` fired CONFUSION.
+The number was never in doubt: it is the one we had just dialled.
+`loadLeads()` now seeds `prefill.phone` with it for every lead rather than only for fixtures that happened to carry the key, and `phone` and `plan_id` have been split into an open `ask` and a `prefilled` confirmation, so a field the operator clears is asked for outright.
+The schema check now refuses any closed field that is not bool or enum and has no `prefilled` script, because that field can only ever be closed by confirming a known value.
+Worth knowing: the eval suite always runs against `loadLeads()[0]`, which is L-1042, and L-1042 is the one fixture that did carry a phone.
+That is why ten passing personas never saw this.
+
+**"Yeah." was eaten by the read-back before it.**
+A prefilled closed field - the account holder question - is confirmed by the yes/no shortcut in `decide()`, which returns before the branch that clears `awaitingConfirm`.
+So the field stayed pending, and the next answer was read as a late yes to it rather than an answer to the question actually on the line.
+The record shows it plainly: at 58:33.700 `account_holder` is re-emitted as confirmed with its old evidence ("Mm, yes.") a whole turn after it was confirmed, and the phone question is asked again in the same millisecond.
+It only ever showed up when the following field was not prefilled too, because a prefilled one overwrote `awaitingConfirm` on its way past.
+`askField()` now clears it whenever it puts a new question on the line.
+
+**A yes to a read-back could be overruled by the model's guess at intent.**
+Found while running the fixed journey end to end, not on the call itself.
+Asked the phone question, a customer said "Yes, that's the one." - one character past the 20 the code uses to decide a yes without the model - so it went to the extractor, which returned no patch and `intent: question`.
+The engine deflected it as an advice question and handed off a customer who had just agreed.
+`decide()` already only trusts the model's intent when the turn produced nothing; a yes or no to a read-back, to the consent question or at the review gate is not nothing, and now counts as an answer before the switch sees it.
+The same guess landing on "no" would have ended the call.
+
+**Then the handoff cut the customer off.**
+Twilio's log again, on `CA68ef69e5`:
+the `<Dial>` redirect went out at 05:58:51 UTC, and our own `status=completed` on the customer's leg followed at 05:58:52.
+The handoff handset's leg, `CA8b93b996`, is on the record at `no-answer` after 0 seconds - the Dial cancelled by its parent hanging up.
+The recorded outcome is `disconnected`, not `handoff`, and that is what proves the ordering.
+
+Redirecting a call ends the `<Connect><Stream>` it is running, so Twilio tears the media stream down *while the update is still in flight*.
+`transfer()` set `this.transferred` only after the update returned, so the teardown arrived first and came back as an ordinary `hangup`: the engine finalised as `disconnected`, `finalise()` called `hangup()`, and `hangup()` completed the very leg that was ringing the human.
+The `if (this.transferred) return` guard added after the second call was correct and simply came too late to help.
+The intent to transfer is now recorded before the redirect goes out and reset only if it throws, a teardown after that point ends the call as `transferred`, and `end()` no longer closes the socket itself once transferred - closing our end of a `<Connect><Stream>` is its own way to end a call.
+`pnpm transport:check` now drives a redirect that tears the stream down the way the real one does, and asserts that no `status=completed` ever follows it.
+
+This is fixed against Twilio's own record of what went wrong, not against a guess, but nobody has yet heard the whisper on the second handset.
+That rehearsal is still the next thing to do.
+
 ## What to watch on the next journey call
 
 - Does the consent gate fire before any field is asked, and is the disclosure audible at the top.
@@ -282,6 +358,8 @@ The other short calls in that session show no AMD hangup and no orchestrator upd
 - Does the console fill live at `localhost:3000`.
 - Echo: the agent hearing itself. On speakerphone this leaked through the token-overlap defence on one turn. Try a handset.
 - Do the prefilled fields land as one yes each: name, date of birth, phone and email should all be confirmations now.
+- Is any question asked twice. One repeat with no re-ask wording ("sorry, ...") in front of it means an answer was eaten by a stale read-back, which is the fifth call's second defect.
+- Does the handoff leave the customer on the line while the second handset rings, and does the recorded outcome come back as `handoff` rather than `disconnected`. The outcome is the cheap tell: `disconnected` after a transfer means we hung up on them again.
 - Does `AMD: machine_start - advisory only, the call continues` appear in the log, and does the call carry on regardless.
 - Does `inbound audio stalled` appear in the orchestrator log. If it does, the tunnel is the next suspect, not Scribe.
 - Do the customer's confidences look like the echo call (0.5 to 1.0) or like the first journey call (0.2 to 0.3). The second means the line, and the fix is the handset, not the code.
@@ -291,7 +369,7 @@ The other short calls in that session show no AMD hangup and no orchestrator upd
 **Blocking a full demo**
 
 - The journey has run over a real phone once and failed on the line. It has not yet completed over a real phone; everything below assumes that happens first.
-- Warm handoff `<Dial>` transfer has still never rung the second handset live. It was refused by guardrail 1 on the second call; both that and the hangup that would have followed are fixed and covered by `pnpm transport:check`, but nobody has yet heard the whisper.
+- Warm handoff `<Dial>` transfer has still never rung the second handset live. It was refused by guardrail 1 on the second call, and on the fifth it went through and then hung the customer up a second later. All three defects are fixed and covered by `pnpm transport:check`, but nobody has yet heard the whisper, and the fix for the fifth call has only been proved against a fake Twilio.
 - The operator console has never been watched during a real call.
 
 **Waiting on CIMET**
