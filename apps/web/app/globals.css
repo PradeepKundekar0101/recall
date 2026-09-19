@@ -1388,3 +1388,262 @@ a.btn-primary { color: var(--on-primary); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- analytics ----------
+   The charts are drawn by hand in SVG, so this section is mostly the frame
+   around them: the tile, the two stacked bars, the field table and the notice
+   that goes up instead of a trend. Every fill is a variable from the top of
+   this file - the dashboard is the same off-white console as everything else,
+   not a dark instrument panel bolted onto it. */
+
+/* One headline number. Reads as a card, like .call-row, because that is what
+   the rest of the product has taught the operator a white box on a hairline is. */
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+}
+.tile-label {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+/* Proportional figures, not tabular: these change when the window changes, not
+   every second, so nothing has to hold its column, and tabular digits make a
+   number this size look loose. */
+.tile-value {
+  font-size: 28px;
+  font-weight: 400;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.tile-sub {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+/* The threshold, drawn. The track is the same plate the escalation lanes use,
+   so a meter reads the same way in both places. */
+.tile-meter {
+  margin-top: 3px;
+  height: 6px;
+  background: var(--surface-strong);
+  border-radius: var(--pill);
+  overflow: hidden;
+}
+.tile-meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--muted-soft);
+  border-radius: var(--pill);
+}
+.tile-good .tile-meter-fill { background: var(--success-line); }
+.tile-warn .tile-meter-fill { background: var(--warn-line); }
+.tile-bad .tile-meter-fill { background: var(--error-line); }
+/* Only the verdict that fails is written in a colour, the same way .stat-over
+   is the one number on a live call that turns red. */
+.tile-warn .tile-value { color: var(--warn); }
+.tile-bad .tile-value { color: var(--error); }
+
+/* ---------- charts ---------- */
+
+.chart-figure { margin: 0; }
+.chart {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+/* Axis ticks line up in a column, so these are the one place tabular digits
+   are the right choice. */
+.chart-axis {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.chart-note {
+  font-size: 11px;
+  font-weight: 500;
+}
+.chart-caption {
+  margin: 10px 0 0;
+  max-width: 62ch;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* ---------- the two stacked bars ----------
+   Stages and outcomes are the same shape: one track cut into slices, then a key
+   naming every slice underneath. The key is not optional - the amber and the
+   two lighter greys do not clear 3:1 on white, so the colour alone is never
+   what tells you which slice is which. */
+
+.stages-bar,
+.outcomes-bar {
+  display: flex;
+  /* White doing the separating. A stroke around each slice would add ink that
+     is not data; a gap in the surface colour costs nothing. */
+  gap: 2px;
+  height: 14px;
+  border-radius: var(--pill);
+  overflow: hidden;
+}
+.stages-slice,
+.outcomes-slice {
+  flex-basis: 0;
+  min-width: 2px;
+}
+
+.stages-key,
+.outcomes-key {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+.stages-dot,
+.outcomes-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--pill);
+  flex: 0 0 auto;
+}
+
+.stages-key {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.stages-key li {
+  display: grid;
+  grid-template-columns: 8px minmax(0, max-content) 7ch minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  font-size: 13px;
+}
+.stages-name { color: var(--ink); }
+.stages-ms {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.stages-hint {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.stages-total {
+  margin: 12px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.outcomes-key {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 7px 20px;
+}
+.outcomes-key li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+/* The server's keys are snake_case; the component unpicks the underscores and
+   this lifts the first letter, so "no_answer" reads as "No answer" without the
+   component owning a second copy of every outcome's name. */
+.outcomes-name { color: var(--ink); }
+.outcomes-name::first-letter { text-transform: uppercase; }
+.outcomes-n {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- field table ----------
+   Numbers right, name left, and the only colour is on the count that says the
+   agent had to ask twice. */
+
+/* The table scrolls inside its own card on a narrow window. Without this the
+   five columns push the console sideways, the same failure .console > * guards
+   against further up this file. */
+.field-table-wrap {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--hairline-strong) transparent;
+}
+.field-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.field-table th,
+.field-table td {
+  padding: 9px 10px;
+  text-align: right;
+  border-bottom: 1px solid var(--hairline);
+}
+.field-table th:first-child,
+.field-table td:first-child {
+  padding-left: 0;
+  text-align: left;
+}
+.field-table td:last-child { padding-right: 0; }
+.field-table thead th {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+  border-bottom-color: var(--hairline-strong);
+}
+.field-table tbody th {
+  font-weight: 500;
+  color: var(--ink);
+}
+.field-table tbody th::first-letter { text-transform: uppercase; }
+.field-table tbody td {
+  color: var(--body);
+  font-variant-numeric: tabular-nums;
+}
+.field-table tbody tr:last-child th,
+.field-table tbody tr:last-child td { border-bottom: none; }
+.field-table .chip { margin-left: 10px; }
+.num-warn {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+/* Not enough calls to draw. The count is set large because the count is the
+   whole message: the window is thin, and the chart that would have gone here
+   would have been a picture of nothing. */
+.thin {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 16px 18px;
+  background: var(--surface-strong);
+  border-radius: var(--radius-lg);
+}
+.thin-count {
+  font-size: 26px;
+  line-height: 1;
+  color: var(--ink);
+}
+.thin-text {
+  max-width: 48ch;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+@media (max-width: 760px) {
+  /* The hint is the first thing to go: on a phone the stage name and its
+     median still fit on one line, and the hint reads fine underneath. */
+  .stages-key li {
+    grid-template-columns: 8px minmax(0, 1fr) 7ch;
+  }
+  .stages-hint { grid-column: 2 / -1; }
+}
