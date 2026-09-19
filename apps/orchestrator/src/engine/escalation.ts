@@ -66,6 +66,15 @@ const BUSY_PATTERNS =
 const ROBOT_PATTERNS = /\b(a bot|a robot|a machine|are you (a )?(real|human)|am i talking to)\b/i;
 
 /**
+ * "Can you repeat that?" is a request for the question, not an answer to it.
+ * Left to the model it was scored as a failed attempt at the field and rated
+ * -1 for anger - one of two attempts and a model round trip spent on what is
+ * simply the question again.
+ */
+const REPEAT_PATTERNS =
+  /\b(repeat|say (that|it) again|come again|pardon|what was that|didn'?t (hear|catch|get) (that|you|it)|once more|one more time)\b/i;
+
+/**
  * Intent the engine can decide without the model. Returns null when only the
  * extractor can tell, which is the common case for an ordinary answer.
  */
@@ -89,13 +98,14 @@ export function looksLikeDontKnow(text: string): boolean {
   return DONT_KNOW_PATTERNS.test(text);
 }
 
-export function ruleIntent(text: string): "decline" | "busy" | "ask_human" | "robot_check" | null {
+export function ruleIntent(text: string): "decline" | "busy" | "ask_human" | "robot_check" | "repeat" | null {
   // Order matters. A decline outranks everything, including a request for a human:
   // "no, don't put me through to anyone, just stop calling" is a decline.
   if (DECLINE_PATTERNS.test(text)) return "decline";
   if (ROBOT_PATTERNS.test(text)) return "robot_check";
   if (ASKS_PATTERNS.test(text)) return "ask_human";
   if (BUSY_PATTERNS.test(text)) return "busy";
+  if (REPEAT_PATTERNS.test(text)) return "repeat";
   return null;
 }
 
@@ -221,12 +231,18 @@ export async function detect(input: DetectInput): Promise<SignalReading[]> {
     fired: offScript,
   });
 
-  // CONFUSION. The field's own re-ask counter.
+  // CONFUSION. The field's own re-ask counter, reported for the meter.
+  //
+  // It does not fire from here. This runs in parallel with extraction, so the
+  // turn being judged may well be the answer that resolves the field - and
+  // firing on `attempts >= maxAttempts` handed off the customer's second attempt
+  // at their name before anyone had looked at it. The engine fires it at the
+  // point a field would have to be asked once more than max_attempts allows.
   readings.push({
     signal: "CONFUSION",
     score: maxAttempts ? Math.min(1, attempts / maxAttempts) : 0,
     evidence: attempts ? `${attempts} attempts on the current field` : "",
-    fired: attempts >= maxAttempts,
+    fired: attempts > maxAttempts,
   });
 
   // LOW CONF. Two consecutive turns.
