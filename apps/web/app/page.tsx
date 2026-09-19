@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { CallSetup as CallSetupBody, FieldValue, Journey } from "@recall/shared";
 import { getJson, postJson } from "../lib/api";
@@ -89,9 +88,6 @@ export default function OperatorConsole() {
   return (
     <div className="console">
       <Nav phase={phase}>
-        <Link href="/calls" className="btn btn-outline">
-          Past calls
-        </Link>
         {/* A guardrail made visible: every lead carries a test number, and the chip says which. */}
         <span className="chip chip-warn">Test run · {lead?.phone ?? "no number"}</span>
       </Nav>

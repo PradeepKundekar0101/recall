@@ -1,3 +1,5 @@
+import { ms } from "../../lib/analytics";
+
 type Stage = { id: string; label: string; p50: number | null; hint: string };
 
 /**
@@ -49,9 +51,4 @@ export function StageBars({ stages, total }: { stages: Stage[]; total: number | 
       {typeof total === "number" && <p className="stages-total">Median turn: {ms(total)}</p>}
     </div>
   );
-}
-
-/** Local until Task 9 puts one formatter in lib/analytics.ts for the whole page. */
-function ms(value: number): string {
-  return value >= 1000 ? `${(value / 1000).toFixed(2)}s` : `${Math.round(value)}ms`;
 }

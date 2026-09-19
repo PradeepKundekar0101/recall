@@ -1647,3 +1647,199 @@ a.btn-primary { color: var(--on-primary); }
   }
   .stages-hint { grid-column: 2 / -1; }
 }
+
+/* ---------- the standing views ----------
+   Two links, beside the wordmark and behind the same hairline: the console has
+   exactly two places you go and stay, and setting up a call is not one of them
+   - that is a flow, and it starts at the wordmark. Set as text rather than as
+   pills so the nav still has one button in it. */
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.nav-link {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 120ms ease, color 120ms ease;
+}
+.nav-link:hover { color: var(--ink); background: var(--surface-strong); }
+/* The view you are in is the one written in ink, the same way the step you are
+   on is in the stepper. */
+.nav-link-on { color: var(--ink); }
+
+/* ---------- the analytics page ----------
+   The dashboard is one column of bands: the controls and the window they
+   resolved to, four headline numbers, then three rows that each pair a chart
+   with the thing that reads it. The frame stays the console's - white cards on
+   hairlines over the off-white floor - because the numbers are loud enough. */
+
+/* The shell runs to 1680px for a projector, which is wider than any of this
+   wants to be: a chart stretched that far flattens its own slope, and four
+   tiles across it become four lonely numbers. */
+.analytics > * { max-width: 1240px; }
+
+.analytics-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+}
+
+/* One window of four, so a track rather than four loose pills: the group is the
+   control and the chosen one is a plate lifted out of it. The ink fill stays
+   reserved for the one primary action in the nav. */
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--pill);
+  background: var(--surface-strong);
+}
+.segmented-option {
+  height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--pill);
+  background: transparent;
+  color: var(--muted);
+  font: 500 13px var(--font-sans);
+  letter-spacing: 0;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.segmented-option:hover { color: var(--ink); }
+.segmented-option.is-on {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-soft);
+}
+
+/* Simulated calls change which calls are counted, not which view of them is
+   shown, so this is a checkbox rather than a fifth segment. */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--body);
+  cursor: pointer;
+}
+.toggle:hover { color: var(--ink); }
+.toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+/* The dates behind the window's label, set quietly at the far end of its own
+   control: it is the caption on the numbers, not a number itself. */
+.provenance {
+  margin: 0 0 0 auto;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The orchestrator's own words, under the sentence that frames them rather than
+   inside it: its 503 body already carries a colon. */
+.notice-detail {
+  display: block;
+  margin-top: 3px;
+  font-weight: 400;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+/* Four, then two, then one. auto-fit would have dropped to three across the
+   middle of the range and left the fourth tile alone on a row of its own, and
+   an orphaned headline number reads as the odd one out rather than as the
+   fourth of four. */
+.analytics-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+/* The chart takes the width; whatever reads it takes the rest. */
+.analytics-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+/* What the card is, then what it is drawn from, then the drawing. The title and
+   its sub travel together so the gap below them is one rule rather than a
+   different one per card. */
+.card-lede { margin-bottom: 14px; }
+.card-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.card-sub {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  max-width: 62ch;
+}
+/* An empty state inside a card is already under a lede, so it does not need the
+   standing room .empty takes when it stands alone in a pane. */
+.analytics .card .empty { padding: 2px 0 4px; }
+
+/* One row per number, with the numbers in a column of their own so four of them
+   read down the right edge rather than trailing their labels. */
+.usage-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.usage-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--hairline-soft);
+  font-size: 13px;
+  color: var(--muted);
+}
+.usage-list li:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+.usage-list li > span:last-child {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  /* A 640px chart and a key beside it stop being two columns well before the
+     console does, so this matches the shell's own breakpoint. */
+  /* minmax(0, 1fr) rather than 1fr: a plain 1fr track is min-width auto, so the
+     field table's five columns would set the card's width and push the whole
+     console sideways instead of scrolling inside their own wrapper. */
+  .analytics-row { grid-template-columns: minmax(0, 1fr); }
+  .analytics-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 560px) {
+  .analytics-tiles { grid-template-columns: minmax(0, 1fr); }
+  /* Wrapped, the auto margin would push the dates to the far side of a line
+     they are alone on. */
+  .provenance { margin-left: 0; }
+}

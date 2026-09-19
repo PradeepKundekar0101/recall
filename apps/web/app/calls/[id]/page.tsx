@@ -24,9 +24,6 @@ export default function CallPage() {
   return (
     <div className="console">
       <Nav phase="call">
-        <Link href="/calls" className="btn btn-outline">
-          All calls
-        </Link>
         <Link href="/" className="btn btn-primary">
           Set up another call
         </Link>
