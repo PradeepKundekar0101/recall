@@ -48,9 +48,9 @@ Trust that field rather than the 201.
 | `pnpm voice:check` | Synthesises a phrase and feeds it back through Scribe. Needs `MOCK_VOICE=0` |
 | `pnpm llm:check` | Structured extraction and streaming, with warm latency medians |
 | `pnpm normalise:check` | Dates, digits, emails, enums, and how each value is read back. Milliseconds, no network |
-| `pnpm dialogue:check` | The engine's turn logic against a fake line: prefilled values confirmed rather than asked, the second attempt heard before CONFUSION fires, nudges held while the customer talks. No vendors |
+| `pnpm dialogue:check` | The engine's turn logic against a fake line: prefilled values confirmed rather than asked, the second attempt heard before CONFUSION fires, nudges held while the customer talks, a yes said over the previous line not confirming the next, two finals a breath apart asking once, and a question that was talked over asked again. No vendors |
 | `pnpm tts:check` | mulaw round-trip and loudness levelling. Milliseconds, no network |
-| `pnpm transport:check` | The Twilio transport against a fake Twilio and a fake media stream: dial, handshake, transfer, the hangup that must not follow it, and the answering-machine verdict that must not end a live call. Rings nothing |
+| `pnpm transport:check` | The Twilio transport against a fake Twilio and a fake media stream: dial, handshake, transfer, the hangup that must not follow it, the answering-machine verdict that must not end a live call, and talking over the agent - a backchannel that must not stop the line, a turn-taker that must, and what was heard when it did. Rings nothing |
 | `pnpm eval` | Ten simulator personas end to end |
 | `pnpm voice:calibrate` | Confidence distribution, clean vs degraded |
 | `pnpm voice:replay <wav>` | A Twilio recording back through the live STT socket, paced like the media stream. Separates a bad line from a bad transcriber |
@@ -136,6 +136,34 @@ Detection runs on the called leg for up to `machine_detection_timeout` *while ou
 Two calls in one session died this way, both at 5.4-6.2 s of detection, mid-conversation.
 `notifyAmd()` now records the verdict and never acts on it; a voicemail is closed by the silence nudges and the abandon timer instead, about twenty seconds in.
 Covered by `pnpm transport:check`.
+
+**Two transcripts a breath apart ran through the engine at once.**
+`handleTurn()` guarded itself with a boolean, and a second final only cancelled the first turn's TTS; the first turn kept going through `extract()` and `decide()`.
+Both turns reached `askNext()` for the same field, so the same question played twice, and a "yeah, go ahead" said over "Great, thanks" was taken as the yes to the name read-back that the first turn asked a moment later.
+Turns now queue and run one at a time (`enqueue()` / `drain()` in `engine/dialogue.ts`), and the opener runs under the same lock.
+
+**A "yes" belongs to the line it was said over, not to whichever line is current when it commits.**
+The transport now reports when each utterance began (`UtteranceMeta.startedAt`, the first partial with words), and the engine compares it with when the current question became audible.
+An utterance that started before the question could be heard - `ANSWER_REACTION_MS` (400) after first audio, covering Scribe's partial latency plus a human reaction - cannot answer, confirm or fail that question, and never moves the journey past it.
+A bare yes or no in that position is logged and ignored; anything longer still goes to the extractor for whatever it volunteered.
+The sim transport passes no timing, so nothing predates anything in `pnpm eval`.
+
+**A question the customer talked over was never asked.**
+`transport.speak()` now resolves with `{ completed, heard }`: whether the line played to the end and, if not, the sentences that had finished when it was cut.
+The transcript keeps what was heard (marked with Scribe's trailing dash) rather than the scripted line, and drops the line if nothing was.
+Once the interruption has been handled - "am I talking to a robot?", a repeat, an ignored late yes - the engine asks the cut question again, word for word, at no cost to the attempt count.
+The handoff bridge is still uninterruptible.
+
+**Two words are a customer agreeing along, not taking the turn.**
+Barge-in fired on any two tokens, so "yeah okay" over a read-back cleared playback and the read-back was never finished.
+`takesTurn()` in `transports/twilio.ts` needs three words, or one of the turn-taking words ("wait", "sorry", "hang on", "no", "what"...).
+Backchannels still reach the engine as utterances; they just do not stop the line.
+All four of the above are covered by `pnpm dialogue:check` and `pnpm transport:check`.
+
+**The filler still plays on its own socket write.**
+`armFiller()` fires `transport.speak()` without waiting for it, so a reply that lands while "Okay." is still playing overlaps it, and the filler's mark then clears `speaking` while the reply is still on the wire, which switches barge-in off for the rest of that reply.
+Not fixed: the check harness has no way to slow extraction down, so there is no test to write first.
+The seam it needs is an injectable extractor on `createEngine()`.
 
 **Never run a transport check without the injected client.**
 The first draft of `transport:check` reached the real Twilio SDK and rang the test handset.
@@ -274,7 +302,7 @@ apps/orchestrator/src/
   voice/stt/scribe.ts           Scribe v2 Realtime; deepgram.ts is the fallback
   voice/tts.ts                  TTS on the voice's fine-tuned model, loudness levelling, ulaw_8000, disk pre-render
   voice/llm/                    anthropic | openai | openrouter | gemini
-  transports/twilio.ts          media stream, barge-in, echo defence, transfer
+  transports/twilio.ts          media stream, barge-in (takesTurn), echo defence, transfer
   calls.ts                      wires transport + engine to the SSE bus
 apps/web/app/                   / operator console, /handoff human console
 packages/shared/                the SSE event union both apps compile against
