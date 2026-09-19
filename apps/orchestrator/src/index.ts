@@ -5,6 +5,7 @@ import { WebSocketServer } from "ws";
 import { api } from "./api/routes.js";
 import { mockSandboxRouter } from "./sandbox/mock-server.js";
 import { attachMediaStream } from "./transports/twilio.js";
+import { attachMonitor } from "./monitor.js";
 import { loadJourney } from "./journey/index.js";
 import { JourneyState } from "./engine/journey-state.js";
 import { prerender } from "./voice/tts.js";
@@ -39,7 +40,23 @@ const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 server.on("upgrade", (req, socket, head) => {
-  const match = (req.url ?? "").match(/^\/media\/([\w-]+)/);
+  const url = req.url ?? "";
+
+  /**
+   * The local monitor: the agent's own voice, live, for anyone on this machine.
+   *
+   * A separate socket from the media stream on purpose. This one carries
+   * outbound audio only and never touches a call - attaching, listening and
+   * disconnecting are all invisible to the customer, which is what makes it
+   * safe to open during a rehearsal.
+   */
+  if (/^\/monitor(\?|$)/.test(url)) {
+    const callId = new URL(url, "http://localhost").searchParams.get("call");
+    wss.handleUpgrade(req, socket, head, (ws) => attachMonitor(ws, callId));
+    return;
+  }
+
+  const match = url.match(/^\/media\/([\w-]+)/);
   if (!match) {
     socket.destroy();
     return;
@@ -133,6 +150,7 @@ server.listen(env.port, () => {
   for (const line of bootReport()) log.info(`  ${line}`);
   log.info(`  ${journeyLine}`);
   log.info(`  saves      ${env.sandboxUrl}${env.sandboxUrl.includes("/mock-crm") ? " (mounted here)" : ""}`);
+  log.info(`  monitor    ws://localhost:${env.port}/monitor${env.monitorCmd ? ` (also piping to ${env.monitorCmd})` : ""}`);
   log.info(`  leads      ${leads.length} synthetic${env.testNumbers[0] ? ` -> ${env.testNumbers[0]}` : " (NO TEST NUMBER SET)"}`);
 
   // Pre-render the fixed lines after the port is open, not before. A cold TTS

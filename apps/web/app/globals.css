@@ -720,6 +720,277 @@ body::after {
   vertical-align: 2px;
 }
 .tag-guardrail { background: var(--error-tint); color: var(--error); }
+.tag-dropped { background: var(--hairline-soft); color: var(--muted); }
+
+/* Taking a handoff back. Sits inside the banner because that is where the
+   operator is already looking when they decide the escalation was wrong, and
+   the window to decide it is only as long as the bridging line. */
+.handoff-undo {
+  margin-top: 10px;
+  background: var(--surface);
+}
+.banner-refused {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* A transcript the engine refused. Struck out and greyed, because it is on the
+   record that it was heard and on the record that it was not acted on - both
+   halves matter when the question from the back of the room is "why did it
+   ignore that". */
+.turn-dropped .turn-text { color: var(--muted); }
+.turn-dropped .turn-text s { text-decoration-color: var(--muted-soft); }
+.turn-dropped .turn-avatar { opacity: 0.45; }
+
+/* The field the agent is on right now, which the pane scrolls to follow. The
+   marker is what makes the movement legible: without it the pane appears to
+   scroll on its own for no stated reason. */
+.field-asking {
+  --state-line: var(--ink);
+}
+.field-asking .field-label {
+  color: var(--ink);
+}
+
+/* ---------- guardrails sheet ---------- */
+
+/* A native <dialog>: the focus trap, Escape, the inert background and the
+   backdrop all come from the element rather than from code of ours. */
+.sheet {
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(82vh, 860px);
+  padding: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 24px 60px rgb(12 10 9 / 0.18);
+  overflow: hidden;
+}
+.sheet::backdrop {
+  /* Warm, not neutral: a grey scrim under this palette reads as a screenshot
+     of a different product. */
+  background: rgb(12 10 9 / 0.32);
+}
+.sheet-body {
+  max-height: inherit;
+  overflow-y: auto;
+  padding: 26px 28px 28px;
+}
+.sheet-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 22px;
+}
+.sheet-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: 28px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.sheet-sub {
+  margin: 8px 0 0;
+  max-width: 46ch;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.guardrails {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: guardrail;
+}
+.guardrail {
+  padding: 18px 0;
+  border-top: 1px solid var(--hairline-soft);
+}
+.guardrail:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+.guardrail-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+/* The number the source comments use for these, so a guardrail read about in
+   the code can be found on this screen and the other way round. */
+.guardrail-number {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted-soft);
+}
+.guardrail-title {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.guardrail-rule {
+  margin: 6px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--body);
+}
+/* A fixed label column, so the six cards line up as one table rather than as
+   six grids each sized by its own longest label. */
+.guardrail-facts {
+  display: grid;
+  grid-template-columns: 172px 1fr;
+  gap: 4px 16px;
+  margin: 12px 0 0;
+}
+.guardrail-facts > div {
+  display: contents;
+}
+.guardrail-facts dt {
+  font-size: 12px;
+  color: var(--muted);
+}
+.guardrail-facts dd {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.guardrail-where {
+  margin-top: 12px;
+}
+.guardrail-where .label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-soft);
+}
+.guardrail-where ul {
+  margin: 0;
+  padding-left: 16px;
+}
+.guardrail-where li {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+/* Amber rather than red: a relaxed guardrail is a fact about this run's
+   configuration, not a failure. */
+.guardrail-relaxed {
+  display: block;
+  margin: 12px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--warn-tint);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--warn);
+}
+.guardrail-window {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--hairline-soft);
+  font-size: 12px;
+  color: var(--ink);
+}
+.guardrail-window .label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-soft);
+}
+.guardrail-window .guardrail-relaxed {
+  flex-basis: 100%;
+  margin-top: 6px;
+}
+
+/* Same three-item problem the transcript pane head has: a title, a new button
+   and the meta. An auto margin does what space-between did for two. */
+.card-head > .pane-title {
+  margin-right: auto;
+}
+
+@media (max-width: 560px) {
+  .sheet-body {
+    padding: 20px 18px 22px;
+  }
+  .sheet-head {
+    flex-direction: column;
+    gap: 12px;
+  }
+  /* The label column stops being worth its width on a phone. */
+  .guardrail-facts {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .guardrail-facts dd {
+    margin-bottom: 8px;
+  }
+}
+
+/* ---------- monitor ---------- */
+
+/* The pane head is two items on every other pane and three on the transcript.
+   An auto margin on the title does what space-between did for two and keeps
+   the monitor toggle next to the meta rather than stranded in the middle. */
+.pane-head > .pane-title { margin-right: auto; }
+.pane-head { gap: 10px; }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--muted);
+  border-color: var(--hairline-strong);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  align-self: center;
+}
+.btn-ghost:hover { color: var(--ink); border-color: var(--ink); }
+.monitor-toggle.is-on {
+  color: var(--ink);
+  border-color: var(--ink);
+  background: var(--hairline-soft);
+}
+/* Hollow while connecting, filled and pulsing once audio can actually arrive -
+   the difference between "I pressed the button" and "this is working". */
+.monitor-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--muted-soft);
+  flex: 0 0 auto;
+}
+.monitor-dot.is-live {
+  border-color: var(--success-line);
+  background: var(--success-line);
+  animation: monitor-pulse 1.8s ease-in-out infinite;
+}
+.monitor-meta {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--muted);
+}
+@keyframes monitor-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .monitor-dot.is-live { animation: none; }
+}
 
 /* ---------- journey form ---------- */
 

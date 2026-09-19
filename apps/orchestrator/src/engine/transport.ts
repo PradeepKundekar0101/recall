@@ -41,6 +41,43 @@ export type UtteranceMeta = {
    * the time the transcript commits.
    */
   startedAt: number | null;
+  /**
+   * How long the speech itself lasted, measured from the provider's own word
+   * timestamps rather than from wall clock between events.
+   *
+   * The half-duplex gate is defined on this: our own voice arriving back off a
+   * speakerphone is a fragment of a sentence, and a customer taking the turn is
+   * half a second of speech or more. Null when the provider gave no timestamps,
+   * in which case the duration clause is skipped rather than guessed at.
+   */
+  speechMs?: number | null;
+  /** How many real (non-spacing) words the provider committed. */
+  words?: number | null;
+};
+
+/**
+ * What the customer has actually heard, by the far end's own acknowledgements.
+ *
+ * Frames are written to Twilio's buffer far faster than realtime, so "the last
+ * frame we wrote" says nothing about "the last thing they heard" - on a short
+ * reply the two are a second apart. Everything that gates on our own voice
+ * being in the room has to be defined on this, not on what was synthesised.
+ *
+ * Transports that cannot tell simply do not implement `playout()`, and the
+ * engine leaves the gate open for them. The simulated customer has no
+ * loudspeaker.
+ */
+export type Playout = {
+  /** True between the first frame reaching the wire and the last one being heard. */
+  ttsPlaying: boolean;
+  /** When the last acknowledged frame finished playing. Zero if nothing has. */
+  ttsEndedAt: number;
+  /**
+   * The sentences of the utterance on the line whose marks have come back,
+   * joined - what the customer has had a chance to hear and therefore what
+   * their microphone has had a chance to pick up.
+   */
+  playedText: string;
 };
 
 export interface Transport {
@@ -110,6 +147,25 @@ export interface Transport {
   transfer(toNumber: string, whisper: string): Promise<void>;
 
   hangup(reason?: string): Promise<void>;
+
+  /**
+   * What the far end has actually played, if it can say. See `Playout`.
+   *
+   * Optional: a transport that cannot tell reports nothing rather than
+   * guessing, and the half-duplex gate stays open for it.
+   */
+  playout?(): Playout;
+
+  /**
+   * Stop the line dead: drop whatever is queued at the far end and treat what
+   * has been acknowledged so far as everything the customer heard.
+   *
+   * Barge-in already does this from inside the transport. This is the same
+   * thing reached from outside, for the engine's half-duplex gate - which
+   * decides that a transcript is the customer taking the turn after the
+   * transport has already let the line keep playing.
+   */
+  stopPlayback?(): void;
 
   /** Where the audio landed, if the transport records. */
   recordingUrl?: string;

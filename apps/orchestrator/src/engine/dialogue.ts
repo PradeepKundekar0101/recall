@@ -8,9 +8,10 @@ import { JourneyState } from "./journey-state.js";
 import type { Form } from "./fact-bus.js";
 import { EscalationDetector, angerPatternMatched, looksLikeDontKnow, redactDigits, ruleIntent, type SignalReading } from "./escalation.js";
 import { extract, type Agreement } from "./extract.js";
+import { halfDuplex } from "./half-duplex.js";
 import { normalise, normaliseBool, speakableValue } from "./normalise.js";
 import { submitField, submitFinal, type SubmitResult } from "../sandbox/submit.js";
-import type { AudioMeta, SpeakResult, Transport, TransportEndReason } from "./transport.js";
+import type { AudioMeta, SpeakResult, Transport, TransportEndReason, UtteranceMeta } from "./transport.js";
 import { TurnClock } from "./turn-clock.js";
 
 /**
@@ -45,6 +46,25 @@ import { TurnClock } from "./turn-clock.js";
  */
 const MAX_CONFIRM_REPEATS = 1;
 
+/** Why a committed transcript was thrown away. Mirrored onto the SSE stream. */
+export type DropReason = "echo" | "low_conf" | "too_short" | "no_intent";
+
+/**
+ * One customer turn, waiting its go.
+ *
+ * `suspect` is decided when the transcript arrives rather than when the turn
+ * runs, because it is a fact about the moment it was spoken: whether the
+ * agent's own voice was audible in the customer's room at the time. By the time
+ * the queue reaches this turn the wire has moved on, and asking then would
+ * answer a different question.
+ */
+type QueuedTurn = {
+  raw: string;
+  confidence: number | null;
+  startedAt: number | null;
+  suspect: boolean;
+};
+
 export type EngineHooks = {
   onAgentLine: (text: string) => void;
   onCustomerLine: (text: string, confidence: number | null) => void;
@@ -59,6 +79,16 @@ export type EngineHooks = {
   onSubmit: (result: SubmitResult) => void;
   /** Called the instant a field reaches `confirmed`, for the audit trail. */
   persistField: (fieldId: string) => void;
+  /**
+   * A committed transcript the engine refused to treat as a turn.
+   *
+   * Dropping is silent on the line by design, which from the operator's chair
+   * looks exactly like the agent not hearing anything. This is what makes the
+   * difference visible on the console.
+   */
+  onTranscriptDropped: (text: string, reason: DropReason, confidence: number | null) => void;
+  /** The operator pulled a handoff back before the line changed hands. */
+  onHandoffCancelled: (reason: EscalationSignal) => void;
   /** One turn's measured stages. Not emitted for a turn that never reached the wire. */
   onTurnTiming: (timing: TurnTiming) => void;
 };
@@ -99,7 +129,7 @@ export class DialogueEngine {
    * confirming a read-back that was only asked because of the turn before it.
    */
   private running = false;
-  private queue: { raw: string; confidence: number | null; startedAt: number | null }[] = [];
+  private queue: QueuedTurn[] = [];
 
   /** The last thing the customer was asked, for "can you say that again?". */
   private lastQuestion: string | null = null;
@@ -122,8 +152,21 @@ export class DialogueEngine {
    * first section could ever be introduced.
    */
   private introducedSection: string | null = null;
+  /**
+   * The operator asked for the handoff back, and whether it is still theirs to ask for.
+   *
+   * There is a real window here - the bridging line plays to the end before the
+   * redirect goes out, and it is uninterruptible, so it is several seconds long.
+   * `handoffCommitted` closes the window at the moment the redirect is handed to
+   * Twilio, because from there the media stream is torn down and the engine has
+   * finalised: there is no line left to resume on.
+   */
+  private handoffCancelled = false;
+  private handoffCommitted = false;
+
   /** A committed transcript that stopped mid-thought, waiting for the rest. */
-  private fragment: { text: string; confidence: number | null; startedAt: number | null } | null = null;
+  private fragment: { text: string; confidence: number | null; startedAt: number | null; suspect: boolean } | null =
+    null;
   private fragmentTimer: NodeJS.Timeout | null = null;
 
   constructor(
@@ -166,7 +209,7 @@ export class DialogueEngine {
       // not committed it yet.
       this.deferSilence();
     });
-    transport.onUtterance((text, confidence, meta) => this.onTranscript(text, confidence, meta?.startedAt ?? null));
+    transport.onUtterance((text, confidence, meta) => this.onTranscript(text, confidence, meta ?? null));
     transport.onBargeIn(() => this.cancelTurn("barge-in"));
     transport.onEnded((reason) => void this.onTransportEnded(reason));
   }
@@ -206,8 +249,41 @@ export class DialogueEngine {
    * Extraction and escalation run concurrently, so a handoff can interrupt a reply
    * that is already being composed.
    */
-  private onTranscript(raw: string, confidence: number | null, startedAt: number | null): void {
+  private onTranscript(raw: string, confidence: number | null, meta: UtteranceMeta | null): void {
     if (this.finalised || this.detector.hasFired) return;
+    let startedAt = meta?.startedAt ?? null;
+
+    /**
+     * The half-duplex gate, ahead of everything.
+     *
+     * Ahead of the fragment hold, ahead of the queue, ahead of the rule
+     * intents: a clip of our own voice must not be joined onto the customer's
+     * half-finished sentence, and it must not be read for "stop calling me"
+     * either. If the agent is audible, this transcript has to prove it is the
+     * customer before any other code is allowed an opinion about it.
+     */
+    const gate = halfDuplex({
+      text: raw,
+      playout: this.transport.playout?.() ?? null,
+      tailMs: env.halfDuplexTailMs,
+      speechMs: meta?.speechMs ?? null,
+      words: meta?.words ?? null,
+    });
+
+    if (gate.verdict === "echo") {
+      this.drop(raw, "echo", confidence, gate.why);
+      return;
+    }
+
+    if (gate.verdict === "barge_in") {
+      // They are genuinely talking over us. Stop generating, stop synthesising,
+      // and drop what Twilio still has buffered - which also truncates the
+      // played text to the last acknowledged mark, so the next transcript is
+      // compared against what they really heard rather than what we wrote.
+      log.call(this.callId, `half-duplex barge-in: ${gate.why}`);
+      this.cancelTurn("half-duplex barge-in");
+      this.transport.stopPlayback?.();
+    }
 
     // A commit that stops mid-thought is held for the rest of the sentence.
     //
@@ -216,6 +292,11 @@ export class DialogueEngine {
     // pause longer than that in the middle of an address: on the second real
     // call "Uh, it's-" was taken as the whole answer, the field was re-asked,
     // and "HSR Layout, Bangalore" arrived after the handoff had fired.
+    // Whether the gate treated this as spoken over us. A `clear` verdict means
+    // the agent was not audible, which is the only case the answer gate's
+    // silent drops stay out of.
+    const suspect = env.answerGateAlways || gate.verdict !== "clear";
+
     if (this.fragment) {
       const held = this.fragment;
       this.dropFragment();
@@ -225,21 +306,25 @@ export class DialogueEngine {
           ? (confidence ?? held.confidence)
           : Math.min(held.confidence, confidence);
       startedAt = held.startedAt ?? startedAt;
+      // The later half decides. A fragment held for two and a half seconds was
+      // spoken under conditions that have since changed, and it is the tail of
+      // the sentence - the part that arrived just now - that says whether the
+      // agent was talking over the customer.
     } else if (looksCutOff(raw)) {
-      this.fragment = { text: raw, confidence, startedAt };
+      this.fragment = { text: raw, confidence, startedAt, suspect };
       this.fragmentTimer = setTimeout(() => {
         const held = this.fragment;
         this.dropFragment();
-        if (held) this.enqueue(held.text, held.confidence, held.startedAt);
+        if (held) this.enqueue(held.text, held.confidence, held.startedAt, held.suspect);
       }, env.fragmentHoldMs);
       return;
     }
 
-    this.enqueue(raw, confidence, startedAt);
+    this.enqueue(raw, confidence, startedAt, suspect);
   }
 
-  private enqueue(raw: string, confidence: number | null, startedAt: number | null): void {
-    this.queue.push({ raw, confidence, startedAt });
+  private enqueue(raw: string, confidence: number | null, startedAt: number | null, suspect: boolean): void {
+    this.queue.push({ raw, confidence, startedAt, suspect });
     if (this.running) {
       // A second utterance while a reply is still being composed cancels the
       // first; the turn itself waits its go.
@@ -252,7 +337,7 @@ export class DialogueEngine {
   private drain(): Promise<void> {
     return this.exclusive(async () => {
       for (let next = this.queue.shift(); next; next = this.queue.shift()) {
-        await this.handleTurn(next.raw, next.confidence, next.startedAt);
+        await this.handleTurn(next.raw, next.confidence, next.startedAt, next.suspect);
       }
     });
   }
@@ -268,13 +353,99 @@ export class DialogueEngine {
     if (this.queue.length) void this.drain();
   }
 
+  /**
+   * Throw a committed transcript away without touching the call.
+   *
+   * Nothing goes on the wire, no attempt is charged, no field moves, and the
+   * question that was asked stays asked - the silence nudges are what handles
+   * a customer who really did say nothing. That is the point: the failure this
+   * whole change exists to stop is the agent *acting* on something the
+   * customer never said, and a re-ask is an action. The console is told, so a
+   * drop is visible to the operator even though it is silent to the customer.
+   */
+  private drop(raw: string, reason: DropReason, confidence: number | null, why: string): void {
+    const text = redactDigits(raw);
+    log.call(this.callId, `dropped "${text.slice(0, 40)}" - ${reason}: ${why}`);
+    this.hooks.onTranscriptDropped(text, reason, confidence);
+  }
+
+  /**
+   * The answer gate: whether a committed segment may write a value.
+   *
+   * Applied to turns that would put something in the form. It deliberately
+   * does not stand between the customer and the yes/no shortcuts in `decide()`
+   * - a "yes" to a read-back is one word and carries no value, so every clause
+   * here would reject it and the journey could never be completed. Those turns
+   * have their own hardening, earned over seven real calls, and the echo case
+   * they are exposed to is a phantom "yes" arriving while the agent is
+   * talking, which the half-duplex gate above has already refused.
+   *
+   * Returns the reason to drop, or null to let the turn through.
+   */
+  private answerGate(text: string, confidence: number | null, asking: JourneyField | null): DropReason | null {
+    /**
+     * Mean word confidence, where Scribe gave one.
+     *
+     * Worth knowing what this costs: the six correctly-transcribed turns
+     * measured on a real call scored 1.00, 0.55, 0.69, 0.85, 1.00 and 1.00, so
+     * a 0.7 floor would have dropped two right answers. It is a deliberate
+     * trade - a dropped answer costs a nudge, an accepted mishearing writes a
+     * wrong value into an energy signup - and `ANSWER_MIN_CONF` is how it gets
+     * retuned after rehearsal rather than by editing this file.
+     */
+    if (confidence !== null && confidence < env.answerMinConf) return "low_conf";
+
+    /**
+     * A spelled field is the exception to the word count, and has to be.
+     *
+     * "P" is a whole answer when the customer is spelling an email out, and a
+     * two-word minimum would reject every letter of it.
+     */
+    const tokens = text.match(/[\p{L}\p{N}]+/gu) ?? [];
+    if (asking?.capture === "spell") return tokens.length >= 1 ? null : "too_short";
+    if (tokens.length < 2) return "too_short";
+
+    return null;
+  }
+
+  /** The field on the line, or null when nothing is being asked. */
+  private askingField(): JourneyField | null {
+    return this.state.asking ? (this.state.fieldById(this.state.asking) ?? null) : null;
+  }
+
+  /**
+   * Whether this turn is a recognised closed answer to the line.
+   *
+   * Deliberately broader than `answer()`'s own `resolvableInCode`, which asks a
+   * different question - whether the model can be skipped - and carries a
+   * length limit for that reason. This one asks whether the turn is a yes or a
+   * no in a position where one means something, which includes the "no" that
+   * carries a correction and therefore does go to the model.
+   */
+  private answersInCode(text: string, predates: boolean): boolean {
+    if (predates) return false;
+    const asking = this.askingField();
+    const boolPosition =
+      this.state.awaitingConfirm.length > 0 ||
+      this.state.phase === "consent" ||
+      this.state.phase === "review" ||
+      asking?.capture === "closed";
+    if (boolPosition && normaliseBool(text) !== null) return true;
+    return asking?.capture === "closed" && asking.type === "enum" && normalise(asking, text).ok;
+  }
+
   private dropFragment(): void {
     if (this.fragmentTimer) clearTimeout(this.fragmentTimer);
     this.fragmentTimer = null;
     this.fragment = null;
   }
 
-  private async handleTurn(raw: string, confidence: number | null, startedAt: number | null): Promise<void> {
+  private async handleTurn(
+    raw: string,
+    confidence: number | null,
+    startedAt: number | null,
+    suspect: boolean
+  ): Promise<void> {
     if (this.finalised || this.detector.hasFired) return;
     // Time zero for this turn: the transcript is in hand and nothing has been
     // decided yet. Turns run one at a time, so one clock at a time is enough.
@@ -318,7 +489,27 @@ export class DialogueEngine {
         // A yes or no to the line before this question. That line has already
         // been dealt with, and this question has not been answered.
         log.call(this.callId, `ignored "${text}" - said before the question on the line`);
-      } else await this.answer(text, raw, confidence, predates);
+      } else {
+        /**
+         * The answer gate, for a turn that would write a value.
+         *
+         * Only on a suspect turn - one spoken while the agent was audible, or
+         * inside the tail after it - because outside that window a quiet or
+         * short segment is the customer on a bad line rather than the room,
+         * and what serves them is the re-ask below.
+         *
+         * A recognised yes or no is exempt wherever one is meaningful. It is
+         * one word and carries no value, so every clause of the gate would
+         * reject it and a third of this journey's questions could never be
+         * answered; and the dangerous version of it - a phantom "yes" while
+         * the agent is talking - has already been refused by the half-duplex
+         * gate, which is where a one-word turn over our own voice dies.
+         */
+        const gated = suspect && !this.answersInCode(text, predates);
+        const reason = gated ? this.answerGate(text, confidence, this.askingField()) : null;
+        if (reason) this.drop(raw, reason, confidence, "answer gate");
+        else await this.answer(text, raw, confidence, predates, suspect);
+      }
 
       await this.resumeQuestion(cutBefore, asksBefore);
     } catch (err) {
@@ -340,7 +531,13 @@ export class DialogueEngine {
   }
 
   /** The model-backed part of a turn: extraction and escalation, then the decision. */
-  private async answer(text: string, raw: string, confidence: number | null, predates: boolean): Promise<void> {
+  private async answer(
+    text: string,
+    raw: string,
+    confidence: number | null,
+    predates: boolean,
+    suspect: boolean
+  ): Promise<void> {
     const asking = this.state.asking ? (this.state.fieldById(this.state.asking) ?? null) : null;
 
     // The line must not go quiet while the model thinks. Measured against a
@@ -451,7 +648,7 @@ export class DialogueEngine {
 
     this.clearFiller();
     if (this.detector.hasFired || this.finalised) return;
-    await this.decide(text, extraction, predates);
+    await this.decide(text, extraction, predates, suspect, raw);
   }
 
   /**
@@ -473,7 +670,13 @@ export class DialogueEngine {
    * heard. It can still volunteer values; it cannot answer, confirm or fail the
    * question, and it never moves the journey past it.
    */
-  private async decide(text: string, extraction: Awaited<ReturnType<typeof extract>>, predates: boolean): Promise<void> {
+  private async decide(
+    text: string,
+    extraction: Awaited<ReturnType<typeof extract>>,
+    predates: boolean,
+    suspect: boolean,
+    raw: string
+  ): Promise<void> {
     const { scripts } = this.state.journey;
 
     // A yes or no to a closed question is an answer, decided here and not by the
@@ -726,6 +929,24 @@ export class DialogueEngine {
       if (asked && !asked.required && looksLikeDontKnow(text)) {
         this.state.form.set(asked.id, { state: "confirmed", value: null, evidence: text.slice(0, 80) });
         return this.askNext();
+      }
+
+      /**
+       * The last clause of the answer gate, which only extraction can answer:
+       * the turn produced no value and no intent worth acting on.
+       *
+       * On a suspect turn that is the room rather than the customer - a
+       * television, somebody else in the house, the tail of our own line - and
+       * a re-ask is the agent talking to it. Dropped silently: the question
+       * stays asked, nothing is charged against the field, and the silence
+       * nudges are what handle a customer who really did say nothing.
+       *
+       * Off a suspect turn this stays a re-ask, because then it is the
+       * customer and they are owed one.
+       */
+      if (suspect) {
+        this.drop(raw, "no_intent", null, "no value and no intent, while the agent was audible");
+        return;
       }
 
       return this.askField(asked, { reask: true });
@@ -1081,6 +1302,13 @@ export class DialogueEngine {
   async handoff(reason: EscalationSignal, evidence: string): Promise<void> {
     if (this.finalised || this.state.phase === "handoff") return;
     this.cancelTurn("handoff");
+    // The bridging line is about five seconds of uninterruptible speech, and
+    // the silence clock was still running underneath it - so "Sorry, are you
+    // still there?" could land on top of "I'm going to get a colleague". It was
+    // invisible while a handoff always ended the call a moment later; now that
+    // one can be pulled back, the clock has to stop here and be restarted by
+    // whatever resumes.
+    this.clearSilence();
     this.state.phase = "handoff";
     this.state.handoffReason = reason;
     // Everything confirmed is already saved; this is the backstop before the line
@@ -1092,6 +1320,11 @@ export class DialogueEngine {
     // Heard whole. Cut short by a customer still finishing their sentence, it
     // left them with "I'm going to" and then a transfer they had no warning of.
     await this.speak(this.state.journey.scripts.handoff_bridge, { interruptible: false });
+
+    // The operator's window. It closes here, on the last statement before the
+    // redirect, because everything after this point belongs to Twilio.
+    if (this.handoffCancelled) return this.resumeFromHandoff(reason);
+    this.handoffCommitted = true;
 
     if (env.handoffNumber) {
       try {
@@ -1106,6 +1339,54 @@ export class DialogueEngine {
       }
     }
     await this.finalise("handoff");
+  }
+
+  /**
+   * Take the call back from the handoff, at the operator's request.
+   *
+   * Synchronous and cheap on purpose: it records the intent and returns, and
+   * `handoff()` acts on it at the one point where acting on it is safe. Trying
+   * to unwind the transfer from here would race the bridging line that is still
+   * playing.
+   */
+  cancelHandoff(): { ok: boolean; reason: string } {
+    if (this.finalised) return { ok: false, reason: "the call has already ended" };
+    if (this.state.phase !== "handoff") return { ok: false, reason: "this call is not being handed off" };
+    if (this.handoffCommitted) {
+      // Honest rather than optimistic. Once the redirect is placed the
+      // <Connect><Stream> is gone, the engine has finalised, and reviving the
+      // voice loop behind a <Dial> is a rebuild, not a cancellation.
+      return { ok: false, reason: "the transfer is already placed - the colleague's phone is ringing" };
+    }
+    this.handoffCancelled = true;
+    log.call(this.callId, "handoff cancelled by the operator - resuming with the agent");
+    return { ok: true, reason: "" };
+  }
+
+  /** Put the customer back with the agent, on the question they were on. */
+  private async resumeFromHandoff(reason: EscalationSignal): Promise<void> {
+    this.handoffCancelled = false;
+    this.state.handoffReason = null;
+    // Otherwise the next turn is refused by the `hasFired` guard on every path
+    // into the engine, and the call sits mute until the abandon timer.
+    this.detector.reset();
+    this.state.phase = this.state.consent ? "section" : "consent";
+    this.hooks.onHandoffCancelled(reason);
+
+    await this.speak(this.state.journey.scripts.handoff_cancelled);
+
+    // The question again, word for word, and at no cost to the attempt count.
+    // Re-asking through askField() would charge an attempt, and the field is
+    // very often already one attempt from the CONFUSION that caused this - so
+    // the cancel would be undone by the turn after it.
+    if (this.lastQuestion) await this.askLine(this.lastQuestion);
+    else if (!this.state.consent) await this.askLine(this.state.render(this.state.journey.scripts.opener));
+    else await this.askNext();
+
+    // Nothing else will: this did not run inside handleTurn, so the nudges that
+    // normally restart in its `finally` never do. Without this the resumed call
+    // would wait for an answer forever and never close itself.
+    if (!this.finalised) this.armSilence();
   }
 
   // ------------------------------------------------------------------ speech

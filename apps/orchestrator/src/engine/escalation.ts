@@ -121,12 +121,65 @@ const ADVICE_PATTERNS =
  * The check is deliberately not Luhn-only. A customer half-reading a card number
  * aloud has not produced a Luhn-valid string yet, and the whole point is to cut in
  * before they finish. Length is the trigger; Luhn only raises the score.
+ *
+ * **Digits have to be dictated together to count together.** This used to
+ * replace every non-digit with a space and then allow unlimited whitespace
+ * between digits, which meant the letters in between became whitespace too and
+ * any eight digits anywhere in a sentence read as one run. Call 17552735 was
+ * handed to a human 47 seconds in because the customer corrected their year of
+ * birth - "it's 1987, not 8-- 1986" - and nine digits scattered across that
+ * sentence matched. A date beside a postcode matched. A phone number matched.
+ * A ten-digit NMI matched. Every one of those is a turn this journey asks for.
+ *
+ * So a run is digits separated by nothing but spaces and hyphens: a word
+ * between two numbers means they are two numbers.
  */
+const DIGIT_RUN = /\d(?:[\s-]*\d)*/g;
+
+/**
+ * Where the bar sits, and why it is not eight.
+ *
+ * A payment card is 13 to 19 digits. The longest number this journey ever asks
+ * a customer to read out is an eleven-digit NMI, and a phone number is ten, so
+ * twelve is the first length that cannot be a legitimate answer - and twelve
+ * digits of a sixteen-digit card is still mid-number, which is what "cut in
+ * before they finish" needs.
+ *
+ * Naming a card removes the ambiguity the bar exists for, so a shorter run
+ * counts when the customer has said what they are reading. Scribe's own PCI
+ * entity detection remains the primary defence and fires mid-utterance, before
+ * any of this sees a committed transcript.
+ */
+const CARD_MIN_DIGITS = 12;
+const CARD_MIN_DIGITS_NAMED = 8;
+
+/**
+ * Words that name a payment instrument.
+ *
+ * Narrower than SENSITIVE_PATTERNS on purpose. That list also carries
+ * "hardship", "dispute" and "deceased", which are sensitive for entirely
+ * different reasons - lowering the digit bar on them would redact a
+ * pensioner's concession number out of the transcript for saying the word.
+ */
+const CARD_WORDS = /\b(card|visa|mastercard|amex|credit|debit|cvv|security code|expiry|payment details)\b/i;
+
+/** Every stretch of digits that was dictated as one number, with its length. */
+function digitRuns(text: string): { text: string; digits: number }[] {
+  return [...text.matchAll(DIGIT_RUN)].map((match) => ({
+    text: match[0],
+    digits: match[0].replace(/\D/g, "").length,
+  }));
+}
+
+/** How many digits in one run make it a card, given what else the turn says. */
+function cardThreshold(text: string): number {
+  return CARD_WORDS.test(text) ? CARD_MIN_DIGITS_NAMED : CARD_MIN_DIGITS;
+}
+
 export function looksLikeCardNumber(text: string): { hit: boolean; span: string | null } {
-  const runs = text.replace(/[^\d\s]/g, " ").match(/(?:\d[\s]*){8,}/g);
-  if (!runs?.length) return { hit: false, span: null };
-  const span = (runs[0] as string).trim();
-  return { hit: true, span };
+  const threshold = cardThreshold(text);
+  const run = digitRuns(text).find((r) => r.digits >= threshold);
+  return run ? { hit: true, span: run.text.trim() } : { hit: false, span: null };
 }
 
 export function luhnValid(digits: string): boolean {
@@ -146,9 +199,19 @@ export function luhnValid(digits: string): boolean {
   return sum % 10 === 0;
 }
 
-/** Redacts a digit run from a transcript line before it is stored or displayed. */
+/**
+ * Redacts a card-length digit run before the line is stored or displayed.
+ *
+ * Held to exactly the same rule as the detector above, because the two
+ * disagreeing is its own bug: the old pair fired SENSITIVE on a sentence it
+ * then printed in full, and redacted a customer's own phone number out of a
+ * transcript whose form shows that number two panes across.
+ */
 export function redactDigits(text: string): string {
-  return text.replace(/(?:\d[\s-]*){8,}/g, "[REDACTED]");
+  const threshold = cardThreshold(text);
+  return text.replace(DIGIT_RUN, (run) =>
+    run.replace(/\D/g, "").length >= threshold ? "[REDACTED]" : run
+  );
 }
 
 const angerTool: ToolSchema = {
@@ -319,6 +382,19 @@ export class EscalationDetector {
 
   get hasFired(): boolean {
     return this.fired;
+  }
+
+  /**
+   * Forget that anything fired, so the call can carry on.
+   *
+   * Only the operator pulling a handoff back reaches this. The streaks go with
+   * the flag deliberately: a handoff the operator has just overruled should not
+   * re-fire on the next turn off pressure that had already been counted, which
+   * is what would happen if only `fired` were cleared.
+   */
+  reset(): void {
+    this.fired = false;
+    this.state = newDetectorState();
   }
 
   /**

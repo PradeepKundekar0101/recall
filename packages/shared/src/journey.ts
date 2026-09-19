@@ -108,6 +108,8 @@ export type JourneyScripts = {
   decline: string;
   busy: string;
   handoff_bridge: string;
+  /** Said when the operator pulls the call back before it changes hands. */
+  handoff_cancelled: string;
   no_advice: string;
   robot_disclosure: string;
 };

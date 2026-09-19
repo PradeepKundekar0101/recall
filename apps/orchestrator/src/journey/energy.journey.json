@@ -415,6 +415,7 @@
     "decline": "No problem at all - I'll make a note and we won't call again. Thanks for your time.",
     "busy": "Of course. Would tomorrow morning or afternoon suit better?",
     "handoff_bridge": "I'm going to get a colleague to help you with this - one moment, they'll have everything you've told me so far.",
+    "handoff_cancelled": "Actually - sorry about that, no need to pass you over. Let's keep going.",
     "no_advice": "That's one a person can answer properly - let me get someone for you.",
     "robot_disclosure": "Yes, I'm an automated assistant. I can get a person on the line if you'd prefer."
   }

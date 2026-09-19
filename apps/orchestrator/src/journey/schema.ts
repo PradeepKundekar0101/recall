@@ -51,6 +51,8 @@ const scriptsSchema = z.object({
   decline: z.string().min(1),
   busy: z.string().min(1),
   handoff_bridge: z.string().min(1),
+  /** Said when the operator pulls the call back before it changes hands. */
+  handoff_cancelled: z.string().min(1),
   no_advice: z.string().min(1),
   robot_disclosure: z.string().min(1),
 });

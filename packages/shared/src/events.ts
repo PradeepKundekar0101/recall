@@ -37,6 +37,28 @@ export type CallEvent =
       text: string;
       confidence: number | null;
     })
+  /**
+   * A committed transcript the engine refused to treat as a turn.
+   *
+   * Dropping is silent to the customer by design - no re-ask, no state change,
+   * nothing on the wire - which from the operator's chair is indistinguishable
+   * from the agent not having heard anything at all. This event is the
+   * difference: the room can see the agent's own voice arriving back off a
+   * speakerphone and being thrown away, which is the whole point of the gate.
+   */
+  | (Base & {
+      type: "transcript.dropped";
+      text: string;
+      /**
+       * `echo` - it arrived while we were talking, or inside the tail after it,
+       * and did not clear the bar for a barge-in.
+       * `low_conf` - mean word confidence below the answer gate's floor.
+       * `too_short` - not enough words, or not enough speech, to be an answer.
+       * `no_intent` - the extractor found neither a value nor an answer in it.
+       */
+      reason: "echo" | "low_conf" | "too_short" | "no_intent";
+      confidence: number | null;
+    })
   | (Base & {
       type: "field.update";
       field: string;
@@ -57,6 +79,15 @@ export type CallEvent =
       fired: boolean;
     })
   | (Base & { type: "escalation.handoff"; reason: EscalationSignal; packet: HandoffPacket })
+  /**
+   * The operator pulled a handoff back before the line changed hands.
+   *
+   * A separate event rather than a second `call.status`, because the console has
+   * to clear the handoff packet it is already showing - and because "this call
+   * was escalated and then un-escalated by a person" is exactly the kind of
+   * thing the audit trail should carry in its own right.
+   */
+  | (Base & { type: "escalation.cancelled"; reason: EscalationSignal })
   | (Base & { type: "guardrail.trigger"; guardrail: GuardrailId; detail: string })
   /**
    * One request to the receiving system, with what was sent and what came back.

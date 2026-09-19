@@ -2,8 +2,11 @@
 
 Written 19 Sep 2026, after the first successful live phone call.
 Updated the same night, after the first and second journey calls over a real phone, and again the next morning after the third and fourth, and again after the fifth, sixth and seventh.
-Next task: **run the Energy journey over a real call again and get a clean submit; the handoff itself now works.**
-Read **The three-minute cut** below first: the extra fields are seeded rather than asked now, the saves changed shape, and the section intros are finally spoken.
+Updated again after rehearsal found the agent accepting answers the customer never gave, and after the eighth call escalated a customer for correcting his year of birth.
+Next task: **run the Energy journey over a real call again, deliberately on speakerphone, and get a clean submit.**
+Read **The eighth journey call** first - guardrail 3 was firing on ordinary answers, which is the shortest path from a working demo to a dead one.
+Then **The agent answering itself**: that failure is acoustic echo, it is now gated rather than hoped about, and two of the numbers that govern it want retuning against a real speakerphone.
+Then read **The three-minute cut**: the extra fields are seeded rather than asked now, the saves changed shape, and the section intros are finally spoken.
 The sixth call is the one to read first: the warm transfer rang the second handset, the human answered, and the two of them talked for 87 seconds.
 
 ## Where things stand
@@ -36,6 +39,10 @@ corepack pnpm dev:api        # orchestrator on :8080, mock CRM mounted at /mock-
 corepack pnpm dev:web        # console on :3000
 ```
 
+The boot report prints `monitor ws://localhost:8080/monitor`.
+That is the agent's own voice, live, for the **Monitor** toggle in the console's transcript pane - or for `ffplay` if `MONITOR_CMD=ffplay` is set.
+Agent audio only; the customer is never on it.
+
 `pnpm sandbox:mock` is no longer part of the run.
 The mock CRM is mounted inside the orchestrator, so there is one process to start rather than two - one fewer thing to be down when the room is watching.
 The boot report prints where saves are going; `saves http://localhost:8080/mock-crm (mounted here)` is what it should say.
@@ -62,10 +69,11 @@ The engine announces every prefilled field before the opener; until it did, the 
 | `pnpm voice:check` | Synthesises a phrase and feeds it back through Scribe. Needs `MOCK_VOICE=0` |
 | `pnpm llm:check` | Structured extraction and streaming, with warm latency medians |
 | `pnpm normalise:check` | Dates, digits, emails, enums, and how each value is read back. Milliseconds, no network |
-| `pnpm dialogue:check` | The engine's turn logic against a fake line: prefilled values confirmed rather than asked, the second attempt heard before CONFUSION fires, nudges held while the customer talks, a yes said over the previous line not confirming the next, two finals a breath apart asking once, a question that was talked over asked again, a reply queued behind the filler rather than on top of it, a field the form has no value for asked outright rather than confirmed at nothing, and a yes outranking the model's guess at intent. No vendors |
+| `pnpm dialogue:check` | The engine's turn logic against a fake line: prefilled values confirmed rather than asked, the second attempt heard before CONFUSION fires, nudges held while the customer talks, a yes said over the previous line not confirming the next, two finals a breath apart asking once, a question that was talked over asked again, a reply queued behind the filler rather than on top of it, a field the form has no value for asked outright rather than confirmed at nothing, and a yes outranking the model's guess at intent. Also the echo gate: our own line coming back confirming nothing, a backchannel and a too-brief clip dropped, a real interruption still taking the floor, a one-word yes never gated, a bad line with the agent quiet still re-asked, and the tail-against-silence-window arithmetic. No vendors |
+| `pnpm escalation:check` | The signals that end a call, against the turns that must not end one: a corrected year, a date beside a postcode, a phone number and a ten-digit NMI are all answers; a card spaced, unspaced, hyphenated, half-read or merely named is a card; and the evidence that reaches the console carries no digits. Milliseconds, no network |
 | `pnpm setup:check` | What the console sends before a dial: seeds and removals folded into the lead, bad fields and briefs refused whole, the dial target untouched, the brief fenced inside the voice prompt, and every fixture carrying the number it will be rung on. Milliseconds, no network |
 | `pnpm tts:check` | mulaw round-trip and loudness levelling. Milliseconds, no network |
-| `pnpm transport:check` | The Twilio transport against a fake Twilio and a fake media stream: dial, handshake, transfer, the hangup that must not follow it, the answering-machine verdict that must not end a live call, talking over the agent - a backchannel that must not stop the line, a turn-taker that must, and what was heard when it did - two lines handed over at once, which must not overlap, and the media stream torn down by the redirect, which must not be read as the customer hanging up. Rings nothing |
+| `pnpm transport:check` | The Twilio transport against a fake Twilio and a fake media stream that plays audio at the speed audio plays: dial, handshake, transfer, the hangup that must not follow it, the answering-machine verdict that must not end a live call, talking over the agent - a backchannel that must not stop the line, a turn-taker that must, and what was heard when it did - two lines handed over at once, which must not overlap, the media stream torn down by the redirect, which must not be read as the customer hanging up, what the customer has actually heard by mark rather than by guess, played text truncated to the last acknowledged mark on a barge-in, and the local monitor's framing and per-call routing. Rings nothing |
 | `pnpm eval` | Ten simulator personas end to end. The per-field saves run for real against whatever `SANDBOX_URL` points at, so start the orchestrator first or the log fills with refused connections |
 | `pnpm voice:calibrate` | Confidence distribution, clean vs degraded |
 | `pnpm voice:replay <wav>` | A Twilio recording back through the live STT socket, paced like the media stream. Separates a bad line from a bad transcriber |
@@ -194,6 +202,22 @@ Both layers now serialise.
 The engine queues every line it speaks, fillers included, because it is what decides the order; the transport queues too, because callers are not trusted to and it owns the wire.
 A filler that is no longer needed by the time the wire is free is dropped rather than played late, so serialising does not cost a turn the 400 ms it was meant to hide.
 `createEngine()` takes an injectable extractor, which is what lets `dialogue:check` slow extraction down enough for the filler to be due; `transport:check` drives two lines onto one wire directly.
+
+**A guardrail that fires wrongly is not a safe failure.**
+Guardrail 3 read any eight digits anywhere in a sentence as a card number, so correcting a year of birth - "it's 1987, not 8-- 1986" - ended call 17552735 with nothing captured.
+Digits only count together now if they were dictated together, and the bar is twelve rather than eight; see **The eighth journey call**.
+The general lesson is the one that keeps being relearned here: the detectors that end calls need tests more than the paths that continue them, because a false positive on this side is silent, expensive and indistinguishable from a decision.
+
+**A mark is the only evidence that anything was heard.**
+Writing a frame to Twilio says nothing about playback: the buffer takes a whole reply in milliseconds and plays it over seconds.
+Everything that asks "is our voice in the customer's room right now" - the half-duplex gate, what a cut line reports as heard - reads `playout()`, which is driven entirely by marks coming back.
+If you add another path that writes audio, give it per-sentence marks through `sendSentence()` or the gate goes blind on those lines.
+`pnpm transport:check` models a playhead rather than acknowledging marks on a timer, which is what makes that checkable at all; a fake that acks on a timer passes every one of those checks with the bug in.
+
+**Pre-rendered lines were never actually being served.**
+`synthesize()` gated the cache *lookup* on `cacheable`, which only `prerender()` passes - so the call path, which passes no options, consulted nothing and every pre-rendered line paid a full ElevenLabs round trip anyway.
+Boot was spending the quota and the call was spending the latency, on the opener that has to land the instant the customer picks up.
+Reading the cache is unconditional now; writing to it still is not, so a dynamic reply still never touches the disk.
 
 **Editing orchestrator source kills the call that is on the line.**
 `tsx watch` restarts on any file under `apps/orchestrator/src`, and a call lives entirely inside that process: transport, engine, silence timers, all of it.
@@ -454,6 +478,182 @@ Collecting a whole section and confirming it once at the end costs three things 
 Prefilled values are the safe subset - they came from the web journey, so CIMET already holds them, and the read-back is a formality rather than the gate.
 Values given by voice keep their immediate read-back, because that is the case the gate exists for.
 
+## The eighth journey call: escalated for saying two years out loud
+
+Call `17552735`, lead L-1043 (Daniel), 65 seconds, handed to a human 47 seconds in with **nothing captured and 0 of 15 hands-free**.
+
+What the customer heard:
+
+```
+Agent    I have Daniel Okafor, 22nd of November, 1976. Is that right?
+Daniel   Uh, yes, it is right, but, uh, it's 1987, not 8-- 1986.    (0.82, captured correctly)
+Agent    Right.
+Agent    I'm going to get a colleague to help you with this - one moment...
+```
+
+He was confirming his name and correcting his year of birth, which is the single most ordinary thing that happens on this call.
+The console said **HANDED OFF - SENSITIVE, "long digit run"**: guardrail 3, the one that exists to cut in on somebody reading out a card number.
+
+There is no card number in that sentence.
+`looksLikeCardNumber` replaced every non-digit with a space before matching, so the letters between "1987" and "1986" became whitespace, and the pattern it then ran allowed unlimited whitespace *between* digits.
+Nine digits scattered across a sentence read as one run of nine.
+The span it matched, and reported as a card, was literally `"1987      8   1986"`.
+
+**Any turn with eight digits anywhere in it fired guardrail 3**, and this journey is full of them:
+
+| The customer says | Digits | Before |
+| --- | --- | --- |
+| "it's 1987, not 8-- 1986" | 9 | handed off |
+| "Born 7 March 1989, postcode 2150" | 9 | handed off |
+| "It's 0412 345 678" - the `phone` field | 10 | handed off |
+| "My NMI is 6407 1234 567" - the `nmi` field | 11 | handed off |
+| "22 11 1976" - a date read as digits | 8 | handed off |
+
+The third and fourth are fields this journey asks for outright, and the second is the answer **The three-minute cut** deliberately invites by asking for the whole address in one breath.
+This was not a rare edge; it was a mine under the middle of the happy path.
+
+**The fix is that digits have to be dictated together to count together.**
+A run is now digits separated by nothing but spaces and hyphens, matched against the raw text - a word between two numbers means they are two numbers.
+The bar moved from eight digits to **twelve**, because a payment card is 13 to 19 digits and the longest number this journey ever asks anyone to read out is an eleven-digit NMI, so twelve is the first length that cannot be a legitimate answer.
+Twelve digits of a sixteen-digit card is still mid-number, which is what "cut in before they finish" needs.
+Naming a card - "the card is 4539 1488" - drops the bar back to eight, because saying the word removes the ambiguity the bar exists for.
+Scribe's own PCI entity detection is unchanged and remains the primary defence: it fires mid-utterance, before any of this sees a committed transcript.
+
+`redactDigits` now runs on exactly the same rule.
+The old pair disagreed, which was its own bug in both directions: SENSITIVE fired on a sentence the console then printed in full, and a customer's own phone number was redacted out of a transcript whose form panel shows that number two panes across.
+
+`pnpm escalation:check` is new and holds all of it, including every row of the table above.
+
+**Something worth taking from this beyond the regex.**
+A guardrail that fires wrongly is not a safe failure.
+This one ended the call, wrote `0/15 hands-free` into the audit trail, and burned a warm transfer on a customer who was answering correctly - and it did it silently, in the sense that nothing on the console suggested the reason was wrong.
+The card heuristic had never had a single test before this call.
+
+## Taking a handoff back
+
+An escalation that fires wrongly is now recoverable from the operator's chair.
+
+`POST /calls/:id/handoff/cancel`, and a **Cancel - keep the agent on** button inside the handoff banner on the console.
+The agent says "Actually - sorry about that, no need to pass you over. Let's keep going." and asks the question it was on again, word for word.
+
+**The window is the bridging line**, which is several seconds of uninterruptible speech, and it closes at the instant the redirect is handed to Twilio.
+After that the `<Connect><Stream>` has been torn down by the redirect and the engine has finalised, so there is no line left to resume on: the endpoint answers 409 with "the transfer is already placed - the colleague's phone is ringing" rather than pretending.
+Reviving the voice loop behind a live `<Dial>` is still a rebuild, not a cancellation.
+
+Three things the resume has to get right, all checked in `pnpm dialogue:check`:
+
+- **The question is repeated, not re-asked.** `askField()` charges an attempt, and the field is very often already one attempt from the CONFUSION that caused the handoff - so re-asking would undo the cancel on the turn after it.
+- **The detector is reset, streaks and all.** Only clearing `fired` would let the same accumulated pressure fire again immediately; and every path into the engine is guarded by `hasFired`, so leaving it set makes the resumed call sit mute until the abandon timer.
+- **The silence clock stops for the handoff and restarts on resume.** It had always been left running underneath the bridging line, so "Sorry, are you still there?" could land on top of "I'm going to get a colleague" - invisible while a handoff always ended the call a moment later.
+
+## The agent answering itself
+
+Rehearsal on speakerphone produced the worst failure this product has: **the agent accepted answers the customer never gave.**
+
+The cause is acoustic echo, and it is worth being precise about it, because every obvious fix addresses something else.
+Our own TTS comes out of the customer's speakerphone and back into the customer's microphone.
+It arrives on the inbound track as ordinary caller audio - correctly transcribed, at ordinary confidence, with our own words in it - and Scribe's VAD commits it as a turn.
+Nothing at the telephony layer can separate it from speech, because at that layer it *is* speech: a microphone really did pick it up and the carrier really did send it.
+On a handset held to the ear there is no acoustic path from earpiece to mouthpiece, which is why the same build behaves perfectly that way, and why "it works when I put it on Ear" is the tell rather than a fluke.
+
+**What is not the fix, and why.**
+
+- **Noise cancellation is not available on this leg.** Twilio's Krisp integration exists only in the Voice JS and Video SDKs, which are WebRTC clients. There is no Krisp option on a PSTN leg or on Media Streams. Krisp do license a server-side 8 kHz SDK, which is out of scope here.
+- **Asking for the inbound track only changes nothing, and there is nothing to ask for.** Twilio documents `track` as a `<Start><Stream>` attribute and states that a bidirectional `<Connect><Stream>` can only receive the inbound track. We already use `<Connect><Stream>`, so this is true by construction and no attribute was added - putting an unsupported attribute on the one piece of TwiML every call depends on buys a default we already have. It would in any case only govern the outbound leg being looped back to us, which was never the path: the echo is in the customer's room.
+
+**What the fix is: know what the customer has actually heard, and refuse anything that sounds like it.**
+
+*Marks, one per sentence.*
+Frames go into Twilio's buffer an order of magnitude faster than they play - a three-sentence reply is written in milliseconds and takes seconds to play - so "the last frame written" is not "the last thing heard".
+Every sentence now carries its own mark (`<utterance id>:<sentence index>`), and `playedText` is the concatenation of the sentences whose marks Twilio has echoed back.
+`ttsPlaying` goes false and `ttsEndedAt` is stamped only when the final mark of an utterance returns.
+On barge-in the pending resolvers are dropped rather than run, which is what truncates `playedText` to the last acknowledged mark: audio a `clear` threw away was never in anyone's room.
+This also replaced the old estimate of what a cut line had been heard - sentence durations against elapsed time - with Twilio's own answer.
+
+*The half-duplex gate, in `engine/half-duplex.ts`, ahead of everything in `onTranscript`.*
+While the agent is audible, or within `HALF_DUPLEX_TAIL_MS` of it, a transcript must clear three bars at once to count as the customer: at least three words, at least 500 ms of speech measured from Scribe's word timestamps, and not a fuzzy substring of `playedText` at 0.8 or better.
+Anything else is discarded silently - no re-ask, no attempt charged, nothing on the wire.
+Clearing all three is treated as a real barge-in: the LLM stream is cancelled, the TTS socket dropped, `clear` sent, and `playedText` truncated.
+
+The similarity test is approximate substring matching rather than containment, because transcribed echo comes back with words dropped and names mangled - "I have Priya Sharma" becomes "have priya sharman".
+
+*The answer gate.*
+A segment that would write a value has to carry mean word confidence of at least `ANSWER_MIN_CONF`, at least two words - or one letter or digit token on a `spell` field - and produce a patch or an answer intent from `extract()`.
+Otherwise it is dropped silently and a `transcript.dropped` event goes to the console with a reason: `echo`, `low_conf`, `too_short` or `no_intent`.
+
+**Two things about the gate that were deliberate, and are worth knowing before retuning it.**
+
+**It is scoped to suspect turns, and that scope is load-bearing.**
+The silent drops apply while the agent is audible or inside the tail - the window in which both causes of this bug are active.
+Outside it, a short or quiet or unparseable segment is the customer on a bad line, and the re-ask tuned over seven real calls serves them better than silence.
+The reason this matters is not theoretical: a dropped segment prompts nothing, and a customer who only speaks in reply to us then never speaks again.
+The mumbler in `pnpm eval` answers at 0.38 and has to reach a CONFUSION handoff; gated unconditionally it reaches the abandon timer instead, in silence.
+`ANSWER_GATE_ALWAYS=1` gives the unconditional version, and the cost of it is exactly that.
+
+**A recognised yes or no is exempt wherever one is meaningful.**
+It is one word and carries no value, so every clause of the answer gate would reject it - and about a third of this journey's questions are closed.
+The dangerous version of a phantom yes is one arriving while the agent is talking, and that dies in the half-duplex gate, which is the right layer for it.
+
+**The tail is measured against when a transcript commits, not when it was spoken, and that arithmetic decides the number.**
+Scribe does not commit until `STT_SILENCE_MS` of quiet has passed, so a real answer lands here at least 700 ms - plus the speech itself, plus the transcriber's latency - after our audio stopped, which is comfortably outside a 400 ms tail.
+That is what keeps a genuine one-word "Yes." from being eaten.
+The same arithmetic has a consequence in the other direction: an echo of the **last** sentence of a line ends as our playback ends, so it commits about `STT_SILENCE_MS` later and a 400 ms tail misses it.
+`pnpm dialogue:check` asserts both halves of that, so changing one number without the other fails a check rather than surprising someone on a live call.
+The default is left at 400 because the dangerous class is caught there regardless - an echo of the earlier sentences, which is the one carrying the name and date a read-back can falsely confirm, commits while playback is still running - but **rehearsal on speakerphone should try `HALF_DUPLEX_TAIL_MS=1200`**, which is where the closing question's echo starts being caught too.
+
+**`ANSWER_MIN_CONF` defaults to 0.7 and that is higher than this account's own measurements justify.**
+The six correctly-transcribed turns measured on a real call scored 1.00, 0.55, 0.69, 0.85, 1.00 and 1.00, so a 0.7 floor would have dropped two right answers.
+It is a deliberate trade - a dropped answer costs a nudge, an accepted mishearing writes a wrong value into an energy signup - but if rehearsal shows the agent going quiet on answers that sounded fine, this is the number to lower, and 0.45 is where the measured distribution puts it.
+
+**Scribe's VAD is tuned, and can be taken over entirely.**
+`STT_SILENCE_MS` is 700, up from the 500 ms floor, because people pause longer than half a second in the middle of an address and a longer window is also a smaller chance of a clip of our own voice committing as a turn of its own.
+`STT_VAD_THRESHOLD` raises the level at which speech is declared, which matters because echo arrives attenuated; it is only sent when set, since Scribe fails the whole socket on a parameter it dislikes and the call then runs with the agent talking and hearing nothing.
+`STT_MANUAL_COMMIT=1` switches `commit_strategy` to `manual` and commits on our own silence timer instead, which unlike the server's knows whether the agent is talking.
+
+**The first committed turn's raw word objects are logged once per session.**
+The gates are defined on per-word `logprob` and on `start` / `end` timestamps, and the only way to know those fields are present and varying is to look at what a live call returns.
+Look for `first committed words:` in the orchestrator log on the next real call and confirm it before trusting the confidence clause.
+
+## Hearing the agent from the room
+
+There is now a local monitor, because "the customer says it sounded broken" is not a debugging tool.
+
+Every frame written to Twilio is also published on `ws://localhost:8080/monitor`, binary, tagged with the call id: one byte of id length, the id, then ulaw 8 kHz.
+**Agent audio only.** The inbound track never passes through `sendFrames`, which is the single point this is tapped, so the monitor cannot become a way to listen to the customer - and it is also the one thing that could feed the echo path it exists to diagnose, if the console were played through a speaker in the same room.
+
+The console has a **Monitor** toggle in the transcript pane head.
+It decodes ulaw to PCM and plays through Web Audio, scheduled against the audio clock with a 100 ms jitter buffer rather than played on arrival - frames arrive far faster than realtime and in bursts, so playing them as they land would run the monitor steadily ahead of the call.
+`MONITOR_CMD=ffplay` pipes the same audio to `ffplay -f mulaw -ar 8000 -i -` instead, paced to realtime on this side because ffplay has no schedule of its own.
+
+The tap is in `sendFrames`, which every route to Twilio goes through - a line synthesised just now, a fixed line served from the pre-render cache, a sentence of a streamed reply - so there is no second write path to remember.
+
+## Two things on the console
+
+**The guardrails are readable from the setup screen.**
+A **Guardrails** button sits in the Agent brief card head - which is the one place on that screen where the operator writes free text for the agent, and therefore where "what can it *not* be told to do?" gets asked.
+It opens a sheet listing all six, each with what it refuses, where it is enforced, and its live configuration.
+
+The content is served from `GET /guardrails`, not written into the console, and that is the whole point of it.
+A guardrail list typed into a React component is marketing copy: it goes on promising an allowlist long after somebody empties the allowlist.
+`guardrails.ts` builds the report from the same `env` and `policy` that `canDial()` reads, so the sheet and the next call cannot disagree.
+It also carries a `relaxed` line per guardrail, so a rule that is currently weakened says so on the same screen that claims it exists - an empty `TEST_NUMBERS`, a missing `HANDOFF_NUMBER`, `IGNORE_CALL_WINDOW=1`.
+Worth opening once before a demo for that reason alone: the first time it was pointed at a running orchestrator it reported, correctly, that it was 23:01 in Sydney and the calling window was not being enforced.
+
+The numbering is the one the source comments already use - "Guardrail 1: test data only" in the dial path, "Guardrail 3" on the digit runs, "Guardrail 6" on the opt-out - and it is sent by the orchestrator rather than taken from array position, so reordering the list cannot silently renumber them.
+
+Dismissal is the native `<dialog>` behaviour plus an explicit Escape handler.
+The native close request is real and correct in a browser somebody is typing in; it is also the one part of this that could not be exercised in automation, where an injected Escape reaches the document without producing a trusted close request. Relying on it alone would have meant shipping the dismissal untested.
+
+**The Journey pane follows the call.**
+Seventeen fields over six sections do not fit the pane, so from the third section on, the part of the form the agent was actually working on was below the fold: the one screen meant to show a call filling itself in was showing the top of a form nobody was looking at.
+The field being asked now is marked in ink and the pane scrolls to keep it centred.
+
+Two details that are easy to get wrong here.
+The scroll is done by hand on `.pane-body` rather than with `scrollIntoView`, which walks *every* scrollable ancestor - on a short window the outer column is scrollable too, so it would yank the whole board, header and transcript included, on every field change.
+And `prefers-reduced-motion` is honoured in JavaScript rather than with `scroll-behavior` in CSS, because a `scrollTo` that asks for `behavior: "smooth"` explicitly overrides the stylesheet: the media query would have looked like it was doing something and done nothing.
+
+A finished call does not follow anything, so reading back over one leaves the scrollbar where the operator put it.
+
 ## The three-minute cut
 
 The organiser confirmed there will be no sandbox and no mocked API from their side, and the demo slot is three minutes.
@@ -529,7 +729,14 @@ It is the answer to "is it actually saving" being asked from the back of a room,
 - Do all six section intros play, and does the call still fit the slot with them in.
 - Does the seeded NMI get acknowledged rather than spelled back at eleven digits.
 - Does the console fill live at `localhost:3000`.
-- Echo: the agent hearing itself. On speakerphone this leaked through the token-overlap defence on one turn. Try a handset.
+- Echo: the agent hearing itself. This is now gated rather than hoped about - see **The agent answering itself**. Run one call deliberately *on speakerphone*, which is the condition the gate exists for, and watch the transcript pane for struck-through lines tagged `dropped - our own voice`. Seeing a few is the feature working. Seeing none on speakerphone means the gate is not firing and the tail is the first thing to raise (`HALF_DUPLEX_TAIL_MS=1200`).
+- Is anything escalated that should not be. Read the reason on the banner rather than trusting it: this is the second time a signal has fired on a customer who was answering correctly. If it is wrong, press **Cancel - keep the agent on** in the banner and the call carries on from the same question.
+- Provoke that cancel once on purpose. Ask for a person, let the bridging line start, then cancel - the agent should apologise, ask its question again, and the board should go back to `live`. Leave it too long and it will tell you the colleague's phone is already ringing, which is the honest answer.
+- Does the agent go quiet on answers that sounded fine. That is the answer gate's confidence floor, and `ANSWER_MIN_CONF` is the number to lower - the default is stricter than this account's own measurements justify.
+- Open **Guardrails** from the Agent brief card once before dialling, and read the amber lines. They are the live configuration, so that is where an empty allowlist or an unenforced calling window will admit itself.
+- Does the Journey pane follow the call down the form as the sections go by, rather than sitting at the top showing Identity.
+- Turn the **Monitor** toggle on at the top of the transcript pane and confirm the agent's voice comes out of the laptop. It is the cheapest way to tell a bad line from a bad render, and it needs no second handset.
+- Confirm `first committed words:` appears once in the orchestrator log, and that the `logprob` values in it vary. The confidence clause of the answer gate is built on that field; if it is absent or always the same, drop the clause rather than trusting it.
 - Do the prefilled fields land as one yes per run: name and date of birth together, then the account holder and the number as their own questions.
 - If the customer says "no" to one of those runs, does naming the wrong one re-open only that one.
 - Is any question asked twice. One repeat with no re-ask wording ("sorry, ...") in front of it means an answer was eaten by a stale read-back, which is the fifth call's second defect.
@@ -578,13 +785,16 @@ apps/orchestrator/src/
   engine/journey-state.ts       per-call state, transcript, review summary
   engine/fact-bus.ts            the form and its state machine
   engine/extract.ts             utterance to field patch
-  engine/escalation.ts          six signals; five decided in code
+  engine/escalation.ts          six signals; five decided in code, and guardrail 3's digit runs
   engine/normalise.ts           dates, digits, emails, enums - never the model
   voice/stt/scribe.ts           Scribe v2 Realtime; deepgram.ts is the fallback
   voice/tts.ts                  TTS on the voice's fine-tuned model, loudness levelling, ulaw_8000, disk pre-render
   voice/llm/                    anthropic | openai | openrouter | gemini
-  transports/twilio.ts          media stream, barge-in (takesTurn), echo defence, transfer
+  engine/half-duplex.ts         the echo gate: what was played, and whether this is the customer
+  transports/twilio.ts          media stream, per-sentence marks, barge-in (takesTurn), transfer
+  monitor.ts                    the agent's own audio, on a local websocket and optionally at ffplay
   calls.ts                      wires transport + engine to the SSE bus
+guardrails.ts                   the six, described live from env and policy for the console
 apps/web/app/                   / operator console, /handoff human console
 packages/shared/                the SSE event union both apps compile against
 ```

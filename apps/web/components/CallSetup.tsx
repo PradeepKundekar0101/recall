@@ -1,8 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import type { FieldValue, Journey, JourneyField } from "@recall/shared";
 import type { LeadRow } from "./CustomerPicker";
 import { sampleSeed } from "../lib/journey";
+import { GuardrailsDialog } from "./GuardrailsDialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
 /**
@@ -46,6 +48,11 @@ export function CallSetup({
   onDial: () => void;
   onDnc: () => void;
 }) {
+  // Declared before the early return below: a hook after a conditional return
+  // is a different hook order on the render where the journey has not arrived
+  // yet, which React refuses at runtime.
+  const [guardrailsOpen, setGuardrailsOpen] = useState(false);
+
   if (!journey) return <p className="empty">Waiting for the journey config.</p>;
 
   const seededCount = journey.fields.filter((f) => seeds[f.id] != null).length;
@@ -107,6 +114,16 @@ export function CallSetup({
         <div className="card">
           <div className="card-head card-head-flush">
             <span className="pane-title">Agent brief</span>
+            {/* The brief is the one place on this screen where the operator
+                writes free text for the agent, so it is also where "what can
+                it not be told to do?" gets asked. */}
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => setGuardrailsOpen(true)}
+            >
+              Guardrails
+            </button>
             <span className="pane-meta">Optional</span>
           </div>
           <p className="card-hint">
@@ -137,6 +154,7 @@ export function CallSetup({
           <div className="brief-count">
             {brief.length} / {BRIEF_MAX}
           </div>
+          <GuardrailsDialog open={guardrailsOpen} onClose={() => setGuardrailsOpen(false)} />
         </div>
 
         <div className="card predial">

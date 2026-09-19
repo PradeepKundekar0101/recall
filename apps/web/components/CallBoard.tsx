@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { Journey } from "@recall/shared";
 import { API } from "../lib/api";
 import { blankForm, medianLatency, useCallStream } from "../lib/useCallStream";
+import { useMonitor } from "../lib/useMonitor";
 import { sectionTitle } from "../lib/journey";
 import { JourneyForm } from "./JourneyForm";
 import { Transcript, customerOf } from "./Transcript";
@@ -23,6 +24,7 @@ import { CallTiming } from "./analytics/CallTiming";
  */
 export function CallBoard({ callId, journey }: { callId: string; journey: Journey | null }) {
   const call = useCallStream(callId, journey);
+  const monitor = useMonitor(callId);
   const [elapsed, setElapsed] = useState(0);
   const [selectedField, setSelectedField] = useState<string | null>(null);
 
@@ -117,6 +119,19 @@ export function CallBoard({ callId, journey }: { callId: string; journey: Journe
         <section className="pane" aria-label="Transcript">
           <div className="pane-head">
             <span className="pane-title">Transcript</span>
+            {/* The agent's own voice, out of this machine. Agent audio only -
+                the customer is never on this socket. */}
+            <button
+              type="button"
+              className={`btn btn-ghost btn-sm monitor-toggle${monitor.on ? " is-on" : ""}`}
+              onClick={monitor.toggle}
+              aria-pressed={monitor.on}
+              title={monitor.error ?? "Hear the agent's own voice from this machine"}
+            >
+              <span className={`monitor-dot${monitor.on && monitor.connected ? " is-live" : ""}`} />
+              Monitor
+              {monitor.on ? <span className="monitor-meta">{monitor.connected ? `${monitor.heardS}s` : "..."}</span> : null}
+            </button>
             {call.recording ? (
               <audio
                 className="player"
@@ -134,6 +149,7 @@ export function CallBoard({ callId, journey }: { callId: string; journey: Journe
               lines={call.transcript}
               interim={call.interim}
               guardrails={call.guardrails}
+              dropped={call.dropped}
               customer={customer}
               brief={call.agentBrief}
             />
@@ -154,6 +170,9 @@ export function CallBoard({ callId, journey }: { callId: string; journey: Journe
               onSelect={setSelectedField}
               selected={selectedField}
               activeSection={over ? null : call.section}
+              // A finished call does not follow anything: the operator reading
+              // back over it should land where they left the scrollbar.
+              askingField={over ? null : call.askingField}
             />
           </div>
         </section>
@@ -169,6 +188,8 @@ export function CallBoard({ callId, journey }: { callId: string; journey: Journe
               handoff={call.handoff}
               section={call.section}
               askingField={call.askingField}
+              callId={callId}
+              live={!over}
             />
           </div>
         </section>

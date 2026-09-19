@@ -102,6 +102,36 @@ export const env = {
   deepgramKey: opt("DEEPGRAM_API_KEY"),
   deepgramModel: opt("DEEPGRAM_MODEL", "nova-3"),
 
+  /**
+   * How long the provider waits on silence before closing a turn.
+   *
+   * Raised from the 500 ms floor to 700. Half a second is shorter than the
+   * pause people leave in the middle of an address, which is what committed
+   * "Uh, it's-" as a whole answer on the second real call. The fragment hold
+   * catches that afterwards; this stops it happening as often to begin with,
+   * and a longer window is also a smaller chance of a clip of our own voice
+   * being committed as a turn of its own.
+   */
+  sttSilenceMs: num("STT_SILENCE_MS", 700),
+  /**
+   * Scribe's voice-activity threshold, raised so quieter audio does not open a
+   * turn. Our own voice coming back off a speakerphone arrives attenuated, so
+   * the level at which speech is declared is a real part of the echo defence.
+   *
+   * Null leaves the server's own default alone. Only sent when set, because
+   * Scribe rejects the entire socket on a parameter it does not like and the
+   * call then runs with no transcription at all.
+   */
+  sttVadThreshold: process.env.STT_VAD_THRESHOLD ? num("STT_VAD_THRESHOLD", 0.5) : null,
+  /**
+   * Ignore Scribe's own VAD and commit on our own silence timer instead.
+   *
+   * The server's turn detection cannot know that we are talking; ours can. With
+   * this on, a turn is closed `STT_SILENCE_MS` after the last partial rather
+   * than whenever the vendor decides the speech stopped.
+   */
+  sttManualCommit: flag("STT_MANUAL_COMMIT", false),
+
   elevenLabsKey: opt("ELEVENLABS_API_KEY"),
   elevenLabsVoiceId: opt("ELEVENLABS_VOICE_ID"),
   ttsModel: opt("TTS_MODEL", "eleven_flash_v2_5"),
@@ -147,6 +177,59 @@ export const env = {
    * human reaction; the checks set it to zero because their line plays instantly.
    */
   answerReactionMs: num("ANSWER_REACTION_MS", 400),
+
+  /**
+   * How long after our own voice stops a transcript is still treated as
+   * possible echo.
+   *
+   * A speakerphone re-emits our line into the customer's microphone and it
+   * arrives on the inbound track as perfectly genuine caller audio, a little
+   * behind us. Twilio's marks tell us when playback ended; this is the margin
+   * on top, covering the room's own delay plus however long Scribe took to
+   * commit what it heard. 400 ms is the floor. A loud room on speakerphone may
+   * need 600-800, and that is what this being an environment variable is for.
+   */
+  halfDuplexTailMs: num("HALF_DUPLEX_TAIL_MS", 400),
+
+  /**
+   * The answer gate's confidence floor.
+   *
+   * Set to the brief's 0.7. Worth knowing before rehearsal: on the one real
+   * call where this was measured, six correctly-transcribed turns scored 1.00,
+   * 0.55, 0.69, 0.85, 1.00 and 1.00 - so a 0.7 floor would have dropped two
+   * answers that were right. Dropping is silent and costs a nudge rather than a
+   * wrong value, which is the trade this floor is choosing. If rehearsal shows
+   * the agent going quiet on answers that sounded fine, this is the number to
+   * lower, and 0.45 is where the measured distribution puts it.
+   */
+  answerMinConf: num("ANSWER_MIN_CONF", 0.7),
+
+  /**
+   * Apply the answer gate to every turn, not only to the suspect ones.
+   *
+   * By default the gate's silent drops apply while the agent is audible or
+   * inside `HALF_DUPLEX_TAIL_MS` of it - the window in which both causes of
+   * this bug are active, our own voice in the room and a VAD opening on the
+   * tail of it. Outside that window a short, quiet or unparseable segment is
+   * the customer on a bad line, and the re-ask that has been tuned over seven
+   * real calls is a better answer than silence.
+   *
+   * That distinction matters more than it looks. A dropped segment prompts
+   * nothing, and a customer who only ever speaks in reply to us then never
+   * speaks again: the mumbler in `pnpm eval` says "mmf shrrm at gmnl" at 0.38
+   * and has to reach a human, and with this on it reaches the abandon timer
+   * instead. Turn it on to get the literal gate, and expect the agent to go
+   * quiet on anyone it cannot hear well.
+   */
+  answerGateAlways: flag("ANSWER_GATE_ALWAYS", false),
+
+  /**
+   * A local player to pipe the agent's own audio at, for a demo with no second
+   * handset in the room. `MONITOR_CMD=ffplay` is the intended value; the
+   * arguments are fixed in `monitor.ts`. Blank means the websocket monitor
+   * only.
+   */
+  monitorCmd: opt("MONITOR_CMD"),
 
   /** Silence on an open question: nudge, nudge again, then close as abandoned. */
   silenceNudgeMs: num("SILENCE_NUDGE_MS", 6000),
