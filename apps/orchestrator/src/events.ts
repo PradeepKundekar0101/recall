@@ -60,6 +60,11 @@ class CallBus extends EventEmitter {
     return this.history.get(callId) ?? [];
   }
 
+  /** Every call this process has seen since it booted, oldest first. */
+  ids(): string[] {
+    return [...this.history.keys()];
+  }
+
   forget(callId: string): void {
     this.history.delete(callId);
   }

@@ -95,6 +95,26 @@ export type Intent =
   | "ask_human"
   | "unclear";
 
+/**
+ * What the operator sets up on the console before dialling. Sent as the body of
+ * POST /calls alongside the lead id; the route refuses the whole body if any
+ * part of it is wrong, so a call never runs on a setup the operator did not see.
+ */
+export type CallSetup = {
+  lead_id: string;
+  /**
+   * Per-field overrides of the lead's prefill. A value seeds the field, so the
+   * agent confirms it in one line instead of asking; null removes it, so the
+   * agent asks. Fields left out keep whatever the lead carried.
+   */
+  prefill?: Record<string, FieldValue | null>;
+  /**
+   * How the agent should talk on this call - warmer, brisker, plainer. It shapes
+   * the lines the model rephrases and never the scripts, which stay verbatim.
+   */
+  agent_brief?: string;
+};
+
 export type Lead = {
   id: string;
   first_name: string;
@@ -137,4 +157,29 @@ export type HandoffPacket = {
   next_field: string | null;
   transcript: TranscriptLine[];
   duration_s: number;
+};
+
+/**
+ * One row of the call history the console lists. Built from the audit table
+ * when there is one, and from the orchestrator's own event buffer for calls it
+ * is still running or ran since it booted.
+ */
+export type CallSummary = {
+  id: string;
+  lead_id: string;
+  /** Looked up from the synthetic leads; null for a lead that is no longer on file. */
+  lead_name: string | null;
+  status: CallStatus;
+  outcome: CallOutcome | null;
+  handoff_reason: EscalationSignal | null;
+  /** ISO timestamps. */
+  started_at: string;
+  ended_at: string | null;
+  duration_s: number | null;
+  fields_hands_free: number | null;
+  fields_total: number | null;
+  has_recording: boolean;
+  test_run: boolean;
+  /** Whether this orchestrator process is still running the call. */
+  live: boolean;
 };

@@ -239,6 +239,104 @@ body::after {
 }
 .select:hover { border-color: var(--ink); }
 
+/* Radix Select (the shadcn/ui component, restyled on this project's tokens
+   instead of Tailwind - see [seed-row] below for where it replaces the
+   native <select>). Trigger mirrors .select-sm's box; content is a popover
+   card with the same radius/shadow language as the rest of the console. */
+.select-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  height: 36px;
+  min-width: 0;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--hairline-strong);
+  background-color: var(--surface);
+  color: var(--ink);
+  font: 400 14px var(--font-sans);
+  letter-spacing: 0.01em;
+  cursor: pointer;
+}
+.select-trigger[data-placeholder] { color: var(--muted-soft); }
+.select-trigger:hover { border-color: var(--ink); }
+.select-trigger:focus-visible,
+.select-trigger[data-state="open"] {
+  outline: none;
+  border-color: var(--ink);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+.select-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.select-trigger-icon {
+  flex: none;
+  color: var(--muted);
+  transition: transform 140ms ease;
+}
+.select-trigger[data-state="open"] .select-trigger-icon { transform: rotate(180deg); }
+
+.select-content {
+  z-index: 20;
+  overflow: hidden;
+  min-width: var(--radix-select-trigger-width);
+  max-height: var(--radix-select-content-available-height);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft), 0 1px 2px rgba(12, 10, 9, 0.06);
+}
+.select-viewport { padding: 4px; }
+.select-label {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.select-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 10px 0 28px;
+  border-radius: var(--radius-sm);
+  font: 400 14px var(--font-sans);
+  color: var(--ink);
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+}
+.select-item[data-highlighted] { background: var(--row); }
+.select-item[data-disabled] {
+  color: var(--muted-soft);
+  cursor: not-allowed;
+}
+.select-item-indicator {
+  position: absolute;
+  left: 10px;
+  display: inline-flex;
+  width: 12px;
+  color: var(--ink);
+}
+.select-separator {
+  height: 1px;
+  margin: 4px -4px;
+  background: var(--hairline);
+}
+.select-scroll-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
 /* Chips are the product's tinted pills. The test-run chip is a guardrail
    made visible, and a simulated call outranks it: that one is going to ring a
    phone, this one never will. */
@@ -351,6 +449,7 @@ body::after {
 .status-answered, .status-live { background: var(--success-line); }
 .status-live { animation: pulse 1.6s ease-in-out infinite; }
 .status-handoff { background: var(--error-line); }
+.status-lost { background: var(--error-line); }
 
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
@@ -395,6 +494,9 @@ body::after {
 .orb-handoff .orb-ring { border-color: var(--error-line); }
 .orb-handoff .orb-img { box-shadow: 0 0 0 5px var(--error-tint); }
 .orb-ended .orb-img { filter: grayscale(1); opacity: 0.45; }
+/* The console lost the orchestrator mid-call: grey, with a broken ring. */
+.orb-lost .orb-img { filter: grayscale(1); opacity: 0.6; }
+.orb-lost .orb-ring { border-color: var(--hairline-strong); border-style: dashed; }
 
 @keyframes orb-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
 @keyframes orb-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
@@ -498,16 +600,6 @@ body::after {
   margin-top: 1px;
   object-fit: cover;
   box-shadow: inset 0 0 0 1px rgba(12, 10, 9, 0.06);
-}
-.avatar-initials {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--surface-strong);
-  color: var(--body);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
 }
 .turn-body { min-width: 0; }
 .turn-head {
@@ -860,6 +952,420 @@ body::after {
   border-radius: 4px;
 }
 
+/* ---------- the two parties ---------- */
+
+.parties {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+/* The customer's face, or their initials where no portrait exists. */
+.portrait {
+  width: var(--portrait-size, 40px);
+  height: var(--portrait-size, 40px);
+  border-radius: 50%;
+  object-fit: cover;
+  flex: 0 0 auto;
+  background: var(--surface-strong);
+  box-shadow: inset 0 0 0 1px rgba(12, 10, 9, 0.08);
+}
+.portrait-initials {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--body);
+  font-weight: 600;
+  font-size: calc(var(--portrait-size, 40px) * 0.38);
+  letter-spacing: 0.02em;
+}
+
+/* ---------- stepper ---------- */
+
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  margin: 0 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+.step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--surface-strong);
+  color: var(--muted);
+}
+.step-active { color: var(--ink); }
+.step-active .step-num { background: var(--ink); color: var(--on-primary); }
+.step-done .step-num { background: var(--success-tint); color: var(--success); }
+
+/* ---------- step one: the customer ---------- */
+
+.step-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 10px 4px 4px;
+}
+.intro-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: 34px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.intro-sub {
+  margin: 6px 0 0;
+  color: var(--muted);
+  max-width: 56ch;
+}
+
+.lead-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  max-width: 1080px;
+}
+.lead-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 22px 22px 20px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-xl);
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  transition: box-shadow 140ms ease, border-color 140ms ease;
+}
+.lead-card:hover {
+  border-color: var(--hairline-strong);
+  box-shadow: var(--shadow-soft);
+}
+.lead-card-selected,
+.lead-card-selected:hover {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+.lead-card .portrait { margin-bottom: 8px; }
+.lead-card-name {
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.lead-card-id {
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.lead-card-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline-soft);
+  font-size: 13px;
+  color: var(--body);
+}
+.lead-card .chip { margin-top: 12px; }
+.step-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  max-width: 1080px;
+}
+
+/* ---------- step two: fields and brief ---------- */
+
+.setup {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 16px;
+  flex: 1 1 0;
+  min-height: 0;
+}
+.card-flush {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px 12px;
+  border-bottom: 1px solid var(--hairline-soft);
+  flex: 0 0 auto;
+}
+/* A head inside a padded card: same row, no chrome of its own. */
+.card-head-flush {
+  padding: 0 0 10px;
+  border-bottom: 0;
+}
+.card-body {
+  padding: 14px 20px 20px;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--hairline-strong) transparent;
+}
+.card-hint {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.setup-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* One field per row: label, the input, and the button beside it. A seeded
+   row is tinted the same blue the live form uses for a prefilled field, so
+   the operator learns the colour before the call starts. */
+.seed-row {
+  display: grid;
+  grid-template-columns: minmax(9ch, 15ch) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 4px 0;
+}
+.seed-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.seed-input,
+.select-sm {
+  height: 36px;
+  width: 100%;
+  min-width: 0;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--hairline-strong);
+  background-color: var(--surface);
+  color: var(--ink);
+  font: 400 14px var(--font-sans);
+  letter-spacing: 0.01em;
+  flex: none;
+}
+.select-sm { padding-right: 30px; }
+.seed-input::placeholder { color: var(--muted-soft); }
+.seed-input:focus,
+.select-sm:focus,
+.brief-input:focus {
+  outline: none;
+  border-color: var(--ink);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+.seed-row-seeded .seed-input,
+.seed-row-seeded .select-sm {
+  border-color: var(--info-line);
+  background-color: var(--info-tint);
+  color: var(--info);
+}
+.btn-sm {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+  min-width: 78px;
+}
+
+.tones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.tone {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--pill);
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface);
+  color: var(--ink);
+  font: 500 13px var(--font-sans);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.tone:hover { border-color: var(--ink); }
+.tone-on {
+  background: var(--primary);
+  color: var(--on-primary);
+  border-color: var(--primary);
+}
+.brief-input {
+  display: block;
+  width: 100%;
+  min-height: 120px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface);
+  color: var(--ink);
+  font: 400 14px/1.5 var(--font-sans);
+  letter-spacing: 0.01em;
+  resize: vertical;
+}
+.brief-input::placeholder { color: var(--muted-soft); }
+.brief-count {
+  margin-top: 6px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.predial-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+.predial-rows > div {
+  display: grid;
+  grid-template-columns: 8ch 1fr;
+  gap: 12px;
+}
+.predial-rows dt { color: var(--muted); }
+.predial-rows dd { margin: 0; color: var(--ink); }
+.predial .notice { margin-bottom: 14px; }
+.predial-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* The brief, once, at the top of the live transcript. */
+.brief-note {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-strong);
+  font-size: 13px;
+  color: var(--body);
+}
+.brief-note .label { display: block; margin-bottom: 2px; }
+.brief-note p { margin: 0; }
+
+/* ---------- links that look like the pills ---------- */
+
+a.btn,
+a.wordmark {
+  text-decoration: none;
+  color: inherit;
+}
+/* The anchor rule above outranks .btn-primary on colour alone. */
+a.btn-primary { color: var(--on-primary); }
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------- past calls ---------- */
+
+.call-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 1080px;
+}
+.call-row {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1.3fr) minmax(0, 1fr) 6ch 6ch auto;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 18px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.call-row:hover {
+  border-color: var(--hairline-strong);
+  box-shadow: var(--shadow-soft);
+}
+.call-row-who {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.call-row-name {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.call-row-sub {
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.call-row-when {
+  font-size: 13px;
+  color: var(--body);
+  white-space: nowrap;
+}
+.call-row-num {
+  font-size: 13px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.call-row-tags {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+/* The recording, in the transcript's header where the streaming state was. */
+.player {
+  height: 32px;
+  width: 250px;
+  max-width: 100%;
+}
+
 /* ---------- responsive ----------
    The console targets a 1440px projector, but the handoff view gets opened on
    whatever laptop is nearest, so it has to hold up narrow. */
@@ -871,6 +1377,12 @@ body::after {
   .panes { grid-template-columns: 1fr; }
   .pane-body { max-height: 46vh; }
   .handoff-grid { grid-template-columns: 1fr; }
+  .setup { grid-template-columns: 1fr; overflow-y: auto; }
+  .setup-fields .card-body { max-height: 60vh; }
+  .lead-grid { grid-template-columns: 1fr 1fr; }
+  .stepper { order: 3; width: 100%; margin: 0; }
+  .call-row { grid-template-columns: 40px minmax(0, 1fr) auto; }
+  .call-row-when, .call-row-num { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

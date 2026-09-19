@@ -32,7 +32,7 @@ export default function HandoffConsole() {
   const packet = call.handoff?.packet ?? null;
   const form = Object.keys(call.form).length ? call.form : blankForm(journey);
   const recent = call.transcript.slice(-5);
-  const customer = customerOf(call.lead?.full_name);
+  const customer = customerOf(call.lead);
 
   if (!callId) {
     return (

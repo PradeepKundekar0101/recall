@@ -44,6 +44,8 @@ export async function startCall(opts: {
   lead: Lead;
   journey: Journey;
   personaId?: string;
+  /** The operator's brief for how the agent should talk. Null when none was written. */
+  agentBrief?: string | null;
 }): Promise<LiveCall> {
   const callId = randomUUID();
   const { lead, journey } = opts;
@@ -76,6 +78,8 @@ export async function startCall(opts: {
     journey_id: journey.id,
     test_run: true,
     dial_target: lead.phone,
+    simulated: env.transport !== "pstn" || env.mockVoice,
+    ...(opts.agentBrief ? { agent_brief: opts.agentBrief } : {}),
   });
   bus.emitEvent(callId, { type: "call.status", status: "dialling" });
 
@@ -193,7 +197,7 @@ export async function startCall(opts: {
           persistField: () => {
             /* the bus subscriber in index.ts mirrors every event into call_events */
           },
-        });
+        }, undefined, { brief: opts.agentBrief ?? null });
 
   const call: LiveCall = { callId, lead, mode, transport, engine, startedAt, finish };
   live.set(callId, call);

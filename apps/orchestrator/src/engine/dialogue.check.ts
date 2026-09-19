@@ -207,6 +207,21 @@ function scenario(id: string, prefill: Record<string, FieldValue>, deps: Deps = 
   return { line, engine, captured };
 }
 
+/**
+ * Says yes until the agent asks the question a scenario wants to start from.
+ *
+ * Counting turns instead pins the test to how many confirmations the journey
+ * happens to need today, so batching the prefilled ones broke eight scenarios
+ * that were not about batching at all.
+ */
+async function walkTo(line: FakeLine, want: RegExp, max = 16): Promise<boolean> {
+  for (let i = 0; i < max && !want.test(line.last()); i++) {
+    line.say("Yes.");
+    await line.settle();
+  }
+  return want.test(line.last());
+}
+
 let failures = 0;
 
 function check(label: string, ok: boolean, detail = ""): void {
@@ -217,6 +232,14 @@ function check(label: string, ok: boolean, detail = ""): void {
 const IDENTITY_AND_CONTACT = {
   full_name: "Priya Sharma",
   dob: "1989-03-07",
+  account_holder: true,
+  phone: "+61412345678",
+  email: "priya.sharma@example.com",
+};
+
+/** A lead with no date of birth on it, so the date has to be given by voice. */
+const IDENTITY_WITHOUT_DOB = {
+  full_name: "Priya Sharma",
   account_holder: true,
   phone: "+61412345678",
   email: "priya.sharma@example.com",
@@ -245,16 +268,12 @@ console.log("\n-- a field the lead already carries is confirmed, not asked");
   line.say("Yes.");
   await line.settle();
 
-  const name = line.last();
-  check("full name is read back for a yes, not asked open-ended", /Priya Sharma/.test(name) && /is that right/i.test(name), name);
+  const readBack = line.last();
+  check("what the lead carries is read back for a yes, not asked open-ended", /Priya Sharma/.test(readBack) && /is that right/i.test(readBack), readBack);
+  check("the date of birth is read back as a human date", /7th of March, 1989/.test(readBack) && !/what's your date of birth/i.test(readBack), readBack);
   line.say("Yes.");
   await line.settle();
   check("a yes confirms the prefilled name", engine.state.form.get("full_name")?.state === "confirmed");
-
-  const dob = line.last();
-  check("date of birth is read back as a human date", /7th of March, 1989/.test(dob) && !/what's your date of birth/i.test(dob), dob);
-  line.say("Yes.");
-  await line.settle();
 
   const holder = line.last();
   check("a closed prefilled field keeps its own yes/no question", /account holder/i.test(holder), holder);
@@ -273,6 +292,76 @@ console.log("\n-- a field the lead already carries is confirmed, not asked");
   const emailField = engine.state.form.get("email");
   check("the prefilled email is confirmed with its value", emailField?.state === "confirmed" && emailField.value === "priya.sharma@example.com");
   check("the first empty field is asked normally", /street address/i.test(line.last()), line.last());
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a run of values the lead carries is confirmed in one line");
+{
+  // Every prefilled field used to cost its own read-back and its own yes, so a
+  // lead that arrived with five fields spent ten turns agreeing with itself
+  // before the first real question. They are confirmed as a run now: consecutive
+  // prefilled fields in one section, as long as the line actually speaks the
+  // value. A line that asks a question rather than reading a value back - "are
+  // you the account holder?", "is this number the best one to reach you on?" -
+  // keeps its own turn, because a yes to a list is not an answer to a question.
+  const { line, engine } = scenario("prefill-run", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  const before = line.spoken.length;
+  line.say("Yes.");
+  await line.settle();
+
+  const asked = line.spoken.slice(before);
+  const readBack = asked.filter((l) => /is that right/i.test(l));
+  check("the name and the date of birth are confirmed together", readBack.length === 1 && /Priya Sharma/.test(readBack[0] ?? "") && /7th of March, 1989/.test(readBack[0] ?? ""), JSON.stringify(readBack));
+
+  line.say("Yes.");
+  await line.settle();
+  const name = engine.state.form.get("full_name");
+  const dob = engine.state.form.get("dob");
+  check("one yes confirms both", name?.state === "confirmed" && dob?.state === "confirmed", `${String(name?.state)} ${String(dob?.state)}`);
+  check("a question keeps its own turn", /account holder/i.test(line.last()), line.last());
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a no that names one of them re-opens only that one");
+{
+  const { line, engine } = scenario("prefill-run-named-no", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+
+  line.say("No, the date of birth is wrong.");
+  await line.settle();
+
+  check("the name they did not object to stands", engine.state.form.get("full_name")?.state === "confirmed", JSON.stringify(engine.state.form.get("full_name")));
+  check("the one they named is re-opened", engine.state.form.get("dob")?.value === null, JSON.stringify(engine.state.form.get("dob")));
+  check("and asked for outright", /date of birth again/i.test(line.last()), line.last());
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a bare no to a list asks which part");
+{
+  // Which value was wrong is not knowable from "no" alone, and re-asking all of
+  // them makes the customer repeat what was already right.
+  const { line, engine } = scenario("prefill-run-bare-no", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+
+  line.say("No.");
+  await line.settle();
+  check("the list is not thrown away on a bare no", /which part/i.test(line.last()), line.last());
+
+  line.say("The date of birth.");
+  await line.settle();
+  check("naming it then re-opens that one", /date of birth again/i.test(line.last()), line.last());
+  check("and the rest stands", engine.state.form.get("full_name")?.state === "confirmed", JSON.stringify(engine.state.form.get("full_name")));
 
   await engine.finalise("incomplete");
 }
@@ -302,7 +391,7 @@ console.log("\n-- a yes to a read-back outranks the model's guess at intent");
 
   check("the yes confirms the field", engine.state.form.get("full_name")?.state === "confirmed", JSON.stringify(engine.state.form.get("full_name")));
   check("no handoff on a customer who said yes", captured.handoff === null, String(captured.handoff));
-  check("the journey moves on", /date of birth/i.test(line.last()), line.last());
+  check("the journey moves on", /account holder/i.test(line.last()), line.last());
 
   await engine.finalise("incomplete");
 }
@@ -367,11 +456,7 @@ console.log("\n-- the answer to a re-ask is heard before CONFUSION is judged");
 {
   const { line, engine, captured } = scenario("second-chance", THROUGH_SUPPLY);
   await engine.begin();
-  for (let i = 0; i < 10; i++) {
-    line.say("Yes.");
-    await line.settle();
-  }
-  check("the walk reaches the fuel type question", /electricity, gas, or both/i.test(line.last()), line.last());
+  check("the walk reaches the fuel type question", await walkTo(line, /electricity, gas, or both/i), line.last());
 
   line.say("Uh, twenty minutes.", 0.3);
   await line.settle();
@@ -401,7 +486,7 @@ console.log("\n-- a read-back nobody answered is said again, not thrown away");
   // Not hearing the answer to a read-back is not the same as being told the
   // value is wrong. The read-back is said again, at no cost to the attempts,
   // and only a second miss gives up on it.
-  const { line, engine, captured } = scenario("unheard-read-back", IDENTITY_AND_CONTACT, {
+  const { line, engine, captured } = scenario("unheard-read-back", IDENTITY_WITHOUT_DOB, {
     extract: async ({ utterance }) => ({
       accepted: /september/i.test(utterance)
         ? [{ field: "dob", value: "2002-09-01", confidence: 0.9, evidence: utterance, needsConfirm: true }]
@@ -412,12 +497,7 @@ console.log("\n-- a read-back nobody answered is said again, not thrown away");
     }),
   });
   await engine.begin();
-  line.say("Yes.");
-  await line.settle();
-  line.say("Yes.");
-  await line.settle();
-
-  check("the walk reaches the date of birth", /7th of March, 1989/.test(line.last()), line.last());
+  check("the walk reaches the date of birth", await walkTo(line, /what's your date of birth/i), line.last());
   line.say("Uh, no. Uh, it's 1st of September, 2002.");
   await line.settle();
   check("the correction is read back", /1st of September, 2002/.test(line.last()), line.last());
@@ -442,7 +522,7 @@ console.log("\n-- a read-back nobody answered is said again, not thrown away");
 // ---------------------------------------------------------------------------
 console.log("\n-- a read-back nobody answers twice gives up and asks again");
 {
-  const { line, engine } = scenario("unheard-read-back-twice", IDENTITY_AND_CONTACT, {
+  const { line, engine } = scenario("unheard-read-back-twice", IDENTITY_WITHOUT_DOB, {
     extract: async ({ utterance }) => ({
       accepted: /september/i.test(utterance)
         ? [{ field: "dob", value: "2002-09-01", confidence: 0.9, evidence: utterance, needsConfirm: true }]
@@ -453,10 +533,7 @@ console.log("\n-- a read-back nobody answers twice gives up and asks again");
     }),
   });
   await engine.begin();
-  line.say("Yes.");
-  await line.settle();
-  line.say("Yes.");
-  await line.settle();
+  await walkTo(line, /what's your date of birth/i);
   line.say("Uh, no. Uh, it's 1st of September, 2002.");
   await line.settle();
 
@@ -499,10 +576,7 @@ console.log("\n-- two failed attempts still hand off");
 {
   const { line, engine, captured } = scenario("cap", THROUGH_SUPPLY);
   await engine.begin();
-  for (let i = 0; i < 10; i++) {
-    line.say("Yes.");
-    await line.settle();
-  }
+  await walkTo(line, /electricity, gas, or both/i);
   line.say("Uh, twenty minutes.", 0.3);
   await line.settle();
   line.say("I just send the MD.", 0.3);
@@ -521,10 +595,7 @@ console.log("\n-- asking for the question again is not a failed answer");
 {
   const { line, engine, captured } = scenario("repeat", THROUGH_SUPPLY);
   await engine.begin();
-  for (let i = 0; i < 10; i++) {
-    line.say("Yes.");
-    await line.settle();
-  }
+  await walkTo(line, /electricity, gas, or both/i);
   line.say("Uh, can you repeat it again?");
   await line.settle();
   check("the question is asked again, word for word", /^Is this for electricity, gas, or both\?$/.test(line.last()), line.last());
@@ -542,10 +613,7 @@ console.log("\n-- a sentence cut off by a pause waits for the rest of itself");
 {
   const { line, engine } = scenario("fragment", THROUGH_SUPPLY);
   await engine.begin();
-  for (let i = 0; i < 10; i++) {
-    line.say("Yes.");
-    await line.settle();
-  }
+  await walkTo(line, /electricity, gas, or both/i);
   const before = line.spoken.length;
   line.say("Uh, it's-", 0.6);
   await sleep(120);
@@ -561,10 +629,7 @@ console.log("\n-- a sentence cut off by a pause waits for the rest of itself");
 {
   const { line, engine } = scenario("fragment-alone", THROUGH_SUPPLY);
   await engine.begin();
-  for (let i = 0; i < 10; i++) {
-    line.say("Yes.");
-    await line.settle();
-  }
+  await walkTo(line, /electricity, gas, or both/i);
   line.say("Uh, it's-", 0.6);
   await sleep(600);
   await line.settle();
@@ -621,11 +686,7 @@ console.log("\n-- a second final while the first is being answered does not ask 
 {
   const { line, engine } = scenario("two-finals", THROUGH_SUPPLY);
   await engine.begin();
-  for (let i = 0; i < 10; i++) {
-    line.say("Yes.");
-    await line.settle();
-  }
-  check("the walk reaches the fuel type question", /electricity, gas, or both/i.test(line.last()), line.last());
+  check("the walk reaches the fuel type question", await walkTo(line, /electricity, gas, or both/i), line.last());
 
   line.speakMs = 40;
   const before = line.spoken.length;
@@ -649,10 +710,9 @@ console.log("\n-- an aside that cuts a question off gets the question asked agai
 {
   const { line, engine } = scenario("aside", THROUGH_SUPPLY);
   await engine.begin();
-  for (let i = 0; i < 9; i++) {
-    line.say("Yes.");
-    await line.settle();
-  }
+  // One short of the fuel type question, so the last yes is what puts it on the
+  // line and it can be cut off mid-flight.
+  await walkTo(line, /that's in NSW/i);
   line.speakMs = 40;
   line.say("Yes.");
   await until(() => /electricity, gas, or both/i.test(line.last()));
@@ -684,11 +744,7 @@ console.log("\n-- the filler and the reply behind it do not talk over each other
     },
   });
   await engine.begin();
-  for (let i = 0; i < 10; i++) {
-    line.say("Yes.");
-    await line.settle();
-  }
-  check("the walk reaches the fuel type question", /electricity, gas, or both/i.test(line.last()), line.last());
+  check("the walk reaches the fuel type question", await walkTo(line, /electricity, gas, or both/i), line.last());
 
   // Now lines take time to play, and the filler is due before extraction lands.
   line.speakMs = 100;

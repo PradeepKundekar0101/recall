@@ -397,6 +397,31 @@ The `<Dial>` is simply the last verb in the document, so when it ended the call 
 From the customer's chair: "I'm going to get a colleague to help you", a pause, and then nothing.
 Fixed by giving the `<Dial>` an `action` URL. `/twilio/handoff-result/:callId` answers it: `completed` means the human took the call and there is nothing left to say, and anything else gets an honest sentence - "I couldn't reach a colleague just now, someone will call you straight back" - before the line goes down. The escalation packet is already on the human console with the transcript, which is what that sentence is promising. What is *not* built is taking a callback time by voice: the media stream is gone and the engine has finalised by then.
 
+## Confirming what the lead already carries
+
+Every prefilled field used to cost its own read-back and its own yes.
+A lead arriving with name, date of birth, phone, email and an address spent ten turns agreeing with itself before the first real question, and both of the calls that died recently died at a confirmation rather than at an answer.
+
+Consecutive prefilled fields in one section are confirmed together now, through the same `confirm()` that has always batched fields volunteered in one breath.
+Identity becomes "I have Priya Sharma, 7th of March, 1989. Is that right?", and a prefilled address becomes one line instead of four.
+
+**What stays on a turn of its own, and why.**
+Only lines that actually speak the value join a run.
+"And are you the account holder for the energy bill?" and "is this number the best one to reach you on?" ask something rather than reading anything back, and a yes to a list of facts is not an answer to a question.
+That is decided by the script rather than by a flag: no `{value}` in the line, nothing to contribute to a list.
+A field `confirm()` would drop for having no confirm template stays out too - `state` has `confirm: "none"`, and batching it left the field sitting in `asking` until CONFUSION picked it up, which is how that rule was found.
+
+**A "no" had to get better to pay for this.**
+It used to clear the whole batch and re-ask the first field, which for a list means making the customer repeat the parts that were right.
+Naming one of them now picks it out - "no, the date of birth is wrong" - and the rest stands.
+A bare "no" asks which part rather than guessing, and the answer comes back through the same name scan, bounded so it cannot loop.
+A correction is read off any field on the line rather than only the first, so "no, it's the 1st of September 2002" answering a name-and-date read-back lands on the date.
+
+**Full section-level confirmation was considered and not built.**
+Collecting a whole section and confirming it once at the end costs three things this is built on: a "no" stops being actionable, `flushCompletedSections()` has nothing to bank when a call drops mid-section, and an escalation hands the human a packet with nothing confirmed in it.
+Prefilled values are the safe subset - they came from the web journey, so CIMET already holds them, and the read-back is a formality rather than the gate.
+Values given by voice keep their immediate read-back, because that is the case the gate exists for.
+
 ## What to watch on the next journey call
 
 - Does the consent gate fire before any field is asked, and is the disclosure audible at the top.
@@ -406,7 +431,8 @@ Fixed by giving the `<Dial>` an `action` URL. `/twilio/handoff-result/:callId` a
 - Do incremental section PUTs land - watch the mock sandbox log for `saved step`.
 - Does the console fill live at `localhost:3000`.
 - Echo: the agent hearing itself. On speakerphone this leaked through the token-overlap defence on one turn. Try a handset.
-- Do the prefilled fields land as one yes each: name, date of birth, phone and email should all be confirmations now.
+- Do the prefilled fields land as one yes per run: name and date of birth together, then the account holder and the number as their own questions.
+- If the customer says "no" to one of those runs, does naming the wrong one re-open only that one.
 - Is any question asked twice. One repeat with no re-ask wording ("sorry, ...") in front of it means an answer was eaten by a stale read-back, which is the fifth call's second defect.
 - Does the handoff leave the customer on the line while the second handset rings, and does the recorded outcome come back as `handoff` rather than `disconnected`. The outcome is the cheap tell: `disconnected` after a transfer means we hung up on them again.
 - Does `AMD: machine_start - advisory only, the call continues` appear in the log, and does the call carry on regardless.
@@ -430,6 +456,7 @@ Fixed by giving the `<Dial>` an `action` URL. `/twilio/handoff-result/:callId` a
 
 **Known limitations found while debugging**
 
+- A value volunteered in answer to a read-back, for a field that is not in that read-back, is dropped. "Priya Sharma, and before you ask I'm the account holder" said to a name read-back confirms the name and then asks the account holder question anyway. Nothing is lost permanently; it costs a turn and a point of the efficiency number.
 - `normalise` reads "1st sep 2002", "the 1st of September 2002" and "No it's 1st sep 2002" into `2002-09-01`, with a read-back, so correcting a date by voice works. It cannot read a year spelled out in words ("two thousand and two"), which returns `could not read a date` and costs an attempt.
 
 **Known flakiness**

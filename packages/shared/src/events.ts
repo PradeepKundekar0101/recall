@@ -25,8 +25,10 @@ type Base = { call_id: string; ts: number };
 
 export type CallEvent =
   /** Replayed first to a browser that connects mid-call, so it can build the board. */
-  | (Base & { type: "call.hello"; lead: Lead; journey_id: string; test_run: boolean; dial_target: string })
+  | (Base & { type: "call.hello"; lead: Lead; journey_id: string; test_run: boolean; dial_target: string; agent_brief?: string; /** True when no phone rang: sim transport or mocked voice. */ simulated?: boolean })
   | (Base & { type: "call.status"; status: CallStatus; outcome?: CallOutcome })
+  /** Twilio has the audio. Fired when its recording callback lands, which is usually after the call has ended. */
+  | (Base & { type: "call.recording"; available: boolean })
   | (Base & { type: "transcript.interim"; speaker: "agent" | "customer"; text: string })
   | (Base & {
       type: "transcript.final";

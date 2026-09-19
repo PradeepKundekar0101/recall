@@ -119,8 +119,8 @@ export const personas: Persona[] = [
     expect: "Journey submitted, 0 re-asks",
     turns: [
       { when: /good time|three minutes/i, say: "Yes, now's fine." },
-      { when: /full name/i, say: "Priya Sharma." },
-      { when: /date of birth/i, say: "Seventh of March, 1989." },
+      // The name and the date of birth arrive as one read-back now, answered by
+      // confirmReply. A turn keyed on either of them would never fire.
       { when: /account holder/i, say: "Yes, that's me." },
       { when: /best one to reach|this number/i, say: "Yes, that's the one." },
       { when: /email/i, say: "p-r-i-y-a dot sharma at gmail dot com." },
@@ -143,8 +143,8 @@ export const personas: Persona[] = [
     expect: "Address and postcode both captured, confirmed once, never re-asked",
     turns: [
       { when: /good time|three minutes/i, say: "Yeah go on then." },
-      { when: /full name/i, say: "Priya Sharma." },
-      { when: /date of birth/i, say: "Seventh of March 1989." },
+      // The name and the date of birth arrive as one read-back now, answered by
+      // confirmReply. A turn keyed on either of them would never fire.
       { when: /account holder/i, say: "Yes." },
       { when: /this number/i, say: "Yes." },
       { when: /email/i, say: "priya dot sharma at gmail dot com." },
@@ -169,8 +169,9 @@ export const personas: Persona[] = [
     confirmReply: null,
     turns: [
       { when: /good time/i, say: "Yeah alright.", confidence: 0.9 },
-      { when: /full name/i, say: "Priya Sharma.", confidence: 0.9 },
-      { when: /date of birth/i, say: "Seventh of March 1989.", confidence: 0.9 },
+      // Answers the identity read-back with the name rather than a yes, which
+      // is a mumbler all over and is taken as agreement because the value matches.
+      { when: /is that right/i, say: "Priya Sharma.", confidence: 0.9 },
       { when: /account holder/i, say: "Yes.", confidence: 0.9 },
       { when: /this number/i, say: "Yep.", confidence: 0.9 },
       { when: /email/i, say: "mmf shrrm at gmnl", confidence: 0.38 },
@@ -184,8 +185,7 @@ export const personas: Persona[] = [
     interrupts: true,
     turns: [
       { when: /good time/i, say: "Yeah yeah go on." },
-      { when: /full name/i, say: "Priya Sharma, and before you ask I'm the account holder." },
-      { when: /date of birth/i, say: "Seventh of March 1989." },
+      { when: /is that right/i, say: "Priya Sharma, and before you ask I'm the account holder." },
       { when: /this number/i, say: "Yes." },
       { when: /email/i, say: "priya dot sharma at gmail dot com." },
     ],
@@ -210,11 +210,10 @@ export const personas: Persona[] = [
   {
     id: "frustrated",
     label: "Frustrated",
-    expect: "ANGER handoff on turn 3 with the packet populated",
+    expect: "ANGER handoff on the turn after the identity read-back, with the packet populated",
     turns: [
       { when: /good time/i, say: "Fine, but be quick." },
-      { when: /full name/i, say: "Priya Sharma." },
-      { when: /date of birth/i, say: "I've already told three of you my details. This is ridiculous." },
+      { when: /account holder/i, say: "I've already told three of you my details. This is ridiculous." },
     ],
   },
   {
@@ -223,8 +222,7 @@ export const personas: Persona[] = [
     expect: "OFF_SCRIPT handoff, no advice given anywhere in the transcript",
     turns: [
       { when: /good time/i, say: "Sure." },
-      { when: /full name/i, say: "Priya Sharma." },
-      { when: /date of birth/i, say: "Actually, hang on - which plan is cheapest for me?" },
+      { when: /account holder/i, say: "Actually, hang on - which plan is cheapest for me?" },
     ],
   },
   {
@@ -233,8 +231,7 @@ export const personas: Persona[] = [
     expect: "Interrupted mid-number, span redacted, SENSITIVE handoff",
     turns: [
       { when: /good time/i, say: "Yes fine." },
-      { when: /full name/i, say: "Priya Sharma." },
-      { when: /date of birth/i, say: "Let me just pay now - the card is 4111 1111 1111 1111." },
+      { when: /account holder/i, say: "Let me just pay now - the card is 4111 1111 1111 1111." },
     ],
   },
   {
@@ -244,7 +241,6 @@ export const personas: Persona[] = [
     turns: [
       { when: /good time|automated/i, say: "Hang on - am I talking to a bot?" },
       { when: /automated assistant/i, say: "Ha, alright. Carry on then." },
-      { when: /full name/i, say: "Priya Sharma." },
     ],
   },
 ];

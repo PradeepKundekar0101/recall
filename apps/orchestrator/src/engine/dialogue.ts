@@ -1,5 +1,6 @@
 import type { CallOutcome, EscalationSignal, FieldValue, Journey, JourneyField, Lead } from "@recall/shared";
 import { env } from "../env.js";
+import { voiceSystemPrompt } from "./voice-prompt.js";
 import { log } from "../log.js";
 import { spellOut } from "../voice/tts.js";
 import { streamSentences } from "../voice/llm.js";
@@ -119,7 +120,9 @@ export class DialogueEngine {
      * Injected by `pnpm dialogue:check`, which needs an extraction it can slow
      * down: the filler exists only to cover a slow one.
      */
-    private extractor: typeof extract = extract
+    private extractor: typeof extract = extract,
+    /** What the operator set up before dialling. The brief shapes generated lines only. */
+    private options: EngineOptions = {}
   ) {
     this.state = new JourneyState(callId, journey, lead);
 
@@ -150,6 +153,15 @@ export class DialogueEngine {
   /** Opener and consent. Nothing can enter a field state before this returns. */
   async begin(): Promise<void> {
     const { scripts } = this.state.journey;
+
+    // The lead's prefill landed inside JourneyState's constructor, before the
+    // change listener above existed, so the console never heard about it: every
+    // prefilled field - the lead's own and anything the operator seeded - showed
+    // as empty until the customer confirmed it. Announce the form as it stands
+    // before the opener, so the board and the audit trail start from the truth.
+    for (const [id, field] of Object.entries(this.state.form.snapshot())) {
+      if (field.state !== "empty") this.hooks.onFieldChange(id);
+    }
 
     // The phase moves to `consent` before the opener is spoken, not after.
     //
@@ -539,7 +551,7 @@ export class DialogueEngine {
       const pending = this.state.awaitingConfirm;
       const fieldId = pending[0] as string;
       const said = normaliseBool(text);
-      const patch = extraction.accepted.find((p) => p.field === fieldId);
+      const patch = extraction.accepted.find((p) => pending.includes(p.field));
       // Said over the line before the read-back: only a value for the field
       // being read back means anything, and the read-back stands otherwise.
       if (predates && !patch) return;
@@ -554,28 +566,59 @@ export class DialogueEngine {
       // this still your number?" they read out a different one, and asked to
       // confirm a prefilled name they simply say the name. Taking that as a "no"
       // and re-asking makes the agent look like it was not listening.
+      //
+      // Any field on the line, not just the first. A read-back covering a name
+      // and a date of birth, answered "no, it's the 1st of September 2002", is a
+      // correction to the second of them; looking only at the first would ask
+      // them which part they meant when they had just said.
       if (patch) {
         // Saying the value back instead of "yes" is a yes.
-        if (sameValue(patch.value, this.state.form.get(fieldId)?.value)) {
+        if (sameValue(patch.value, this.state.form.get(patch.field)?.value)) {
           for (const id of pending) this.state.form.set(id, { state: "confirmed" });
           return this.askNext();
         }
+        // The rest of the list stands: they corrected one thing.
+        for (const id of pending) if (id !== patch.field) this.state.form.set(id, { state: "confirmed" });
         // A different value, heard by voice, gets its own read-back before it
         // counts. The second real call wrote a garbled correction straight
         // into the form with no read-back at all.
-        this.state.form.set(fieldId, {
+        this.state.form.set(patch.field, {
           state: "captured",
           value: patch.value,
           confidence: patch.confidence,
           evidence: patch.evidence,
         });
-        return this.confirm([fieldId]);
+        return this.confirm([patch.field]);
+      }
+
+      // Naming one of the values on the line picks it out without giving a new
+      // one. That covers "no, the date of birth is wrong", and it covers the
+      // answer to "which part should I change?", which is the same question
+      // asked the other way round.
+      const named = this.state.journey.fields.find(
+        (f) => pending.includes(f.id) && text.toLowerCase().includes(f.label.toLowerCase())
+      );
+      if (named && !predates) {
+        // The rest of the list stands. They objected to one thing, and making
+        // them say the others again is what "it wasn't listening" feels like.
+        for (const id of pending) if (id !== named.id) this.state.form.set(id, { state: "confirmed" });
+        this.state.form.reject(named.id);
+        return this.askField(named, { reask: true });
       }
 
       if (said === false) {
-        // A "no" to a batch clears the whole batch. Which value was wrong is not
-        // knowable from "no", and keeping two of three would silently confirm
-        // something the customer just rejected.
+        // A bare "no" to a list says something is wrong without saying what, and
+        // the two ways of guessing are both bad: keeping two of three silently
+        // confirms something they just rejected, and clearing all three makes
+        // them repeat the two that were right. So ask, and leave the list on the
+        // line - the answer comes back through the name scan above.
+        if (pending.length > 1 && this.confirmRepeats < MAX_CONFIRM_REPEATS) {
+          this.confirmRepeats++;
+          this.state.awaitingConfirm = pending;
+          await this.speak("No problem - which part should I change?");
+          return;
+        }
+        // One value, or they have been asked once already: clear it and ask.
         for (const id of pending) this.state.form.reject(id);
         return this.askField(this.state.fieldById(fieldId), { reask: true });
       }
@@ -744,8 +787,21 @@ export class DialogueEngine {
       // bad mobile connection. The first real call asked "Can I start with your
       // full name?" for a name the lead already held, misheard the answer twice,
       // and handed off with nothing captured.
-      this.state.awaitingConfirm = [field.id];
+      //
+      // And confirmed as a run, not one at a time. A lead that arrives with an
+      // address already on it used to spend eight turns agreeing with itself
+      // before the first real question, and every one of those turns is a turn
+      // a phone line can lose.
+      const run = this.prefilledRun(field);
+      if (run.length > 1) {
+        // They were all asked, so they all carry the attempt. A field confirmed
+        // by the first yes never enters `asking` again.
+        for (const id of run) if (id !== field.id) this.state.form.set(id, { state: "asking" });
+        return this.confirm(run);
+      }
+
       const spoken = speakableValue(field, prefilled);
+      this.state.awaitingConfirm = [field.id];
       await this.askLine(
         this.state.render(prefilledLine(field), {
           value: spoken,
@@ -767,6 +823,43 @@ export class DialogueEngine {
     // because a prefilled one overwrote this on its way past.
     this.state.awaitingConfirm = [];
     await this.askLine(this.state.render(opts.reask ? field.script.reask : field.script.ask));
+  }
+
+  /**
+   * The run of values the lead already carries that can be confirmed in one line.
+   *
+   * Consecutive, in one section, and only lines that actually speak the value.
+   * That last condition is what keeps "and are you the account holder for the
+   * energy bill?" and "is this number the best one to reach you on?" on turns of
+   * their own: they read nothing back, they ask something, and a yes to a list
+   * of facts is not an answer to a question. It is a property of the script
+   * rather than a flag to keep in step - a line with no {value} in it has
+   * nothing to contribute to a list.
+   */
+  private prefilledRun(from: JourneyField): string[] {
+    const fields = this.state.journey.fields;
+    const start = fields.indexOf(from);
+    if (start < 0 || !speaksItsValue(from) || !from.script.confirm) return [from.id];
+
+    const run: string[] = [];
+    for (let i = start; i < fields.length; i++) {
+      const field = fields[i] as JourneyField;
+      if (field.section !== from.section) break;
+      if (!this.state.form.applies(field.id)) continue;
+      const held = this.state.form.get(field.id);
+      // The field we started from is already in `asking`: askField moved it
+      // there before it knew whether this was a run.
+      const stillPrefilled = i === start ? held?.value !== null : held?.state === "prefilled" && held.value !== null;
+      if (!stillPrefilled) break;
+      // Only fields confirm() will actually read back in a list. A field with
+      // no confirm script is dropped there, and a field marked asked that
+      // nothing then asks about is a field the customer is never given the
+      // chance to answer: `state` has confirm "none", and batching it left it
+      // sitting in `asking` until CONFUSION picked it up.
+      if (!speaksItsValue(field) || !field.script.confirm) break;
+      run.push(field.id);
+    }
+    return run.length ? run : [from.id];
   }
 
   /**
@@ -996,9 +1089,7 @@ export class DialogueEngine {
       const spoken = await this.onTheWire(() =>
         this.transport.speakStream(
           streamSentences({
-            system:
-              "You are a concise Australian call-centre assistant. Say the given line in one or two short " +
-              "sentences. Never give advice, never invent details, never ask for information you were not given.",
+            system: voiceSystemPrompt(this.options.brief),
             messages: [{ role: "user", content: text }],
             signal: controller.signal,
           }),
@@ -1166,6 +1257,11 @@ export class DialogueEngine {
   }
 }
 
+/** Whether a field's confirmation line reads its value out, rather than asking something. */
+function speaksItsValue(field: JourneyField): boolean {
+  return /\{value(_spelled)?\}/.test(prefilledLine(field));
+}
+
 /** Words with something in them, for telling a misheard yes from a real reply. */
 function wordCount(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
@@ -1221,6 +1317,11 @@ function prefilledLine(field: JourneyField): string {
   return field.script.confirm ?? field.script.ask;
 }
 
+export type EngineOptions = {
+  /** The operator's brief for this call, from the console. See voice-prompt.ts. */
+  brief?: string | null;
+};
+
 /** Convenience for the eval harness and the API route. */
 export function createEngine(opts: {
   callId: string;
@@ -1229,6 +1330,9 @@ export function createEngine(opts: {
   transport: Transport;
   hooks: EngineHooks;
   extract?: typeof extract;
+  brief?: string | null;
 }): DialogueEngine {
-  return new DialogueEngine(opts.callId, opts.journey, opts.lead, opts.transport, opts.hooks, opts.extract);
+  return new DialogueEngine(opts.callId, opts.journey, opts.lead, opts.transport, opts.hooks, opts.extract, {
+    brief: opts.brief,
+  });
 }
