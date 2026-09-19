@@ -21,11 +21,30 @@ check("p50 of one value is that value", percentile([7], 50) === 7);
 check("p50 of 1..10 is 5", percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 50) === 5, String(percentile([1,2,3,4,5,6,7,8,9,10], 50)));
 check("p90 of 1..10 is 9", percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 90) === 9, String(percentile([1,2,3,4,5,6,7,8,9,10], 90)));
 check("p100 is the max", percentile([1, 2, 3], 100) === 3);
+check("p0 is the min", percentile([5, 1, 9], 0) === 1, String(percentile([5, 1, 9], 0)));
+// An even-length set has no middle element, which is exactly where a
+// half-open vs closed rank formula disagrees with itself.
+check("p50 of an even-length set is nearest-rank, not an average", percentile([1, 2, 3, 4], 50) === 2, String(percentile([1, 2, 3, 4], 50)));
+check("p90 of an even-length set is nearest-rank", percentile([1, 2, 3, 4], 90) === 4, String(percentile([1, 2, 3, 4], 90)));
+{
+  const input = [3, 1, 4, 2];
+  const before = [...input];
+  percentile(input, 50);
+  check("percentile does not mutate the array it is given", JSON.stringify(input) === JSON.stringify(before), JSON.stringify(input));
+}
 
 const stats = summarise([10, 20, 30, 40]);
 check("summarise reports n", stats?.n === 4);
 check("summarise reports min and max", stats?.min === 10 && stats?.max === 40);
 check("summarise of nothing is null", summarise([]) === null);
+check("summarise p50 on an even-length set", stats?.p50 === 20, String(stats?.p50));
+check("summarise p90 on an even-length set", stats?.p90 === 40, String(stats?.p90));
+{
+  const input = [3, 1, 4, 2];
+  const before = [...input];
+  summarise(input);
+  check("summarise does not mutate the array it is given", JSON.stringify(input) === JSON.stringify(before), JSON.stringify(input));
+}
 
 // ---- fixtures
 function turn(over: Partial<TurnRow> = {}): TurnRow {
@@ -73,10 +92,13 @@ function report(over: Partial<{ calls: CallLite[]; turns: TurnRow[]; fieldEvents
   });
 }
 
-// ---- the tiling identity
+// ---- the tiling identity, on numbers that actually came back from buildAnalytics
+// (the fixture-only version of this check just adds up literals it set itself
+// and would pass no matter what the module does with them)
 {
-  const t = turn({ think_ms: 300, wire_wait_ms: 100, tts_ttfb_ms: 200, first_audio_ms: 600 });
-  check("the three tiling stages sum to first audio", t.think_ms + t.wire_wait_ms + t.tts_ttfb_ms === t.first_audio_ms);
+  const r = report({ turns: [turn({ think_ms: 300, wire_wait_ms: 100, tts_ttfb_ms: 200, first_audio_ms: 600 })] });
+  const sum = (r.latency.stages.think?.p50 ?? NaN) + (r.latency.stages.wire_wait?.p50 ?? NaN) + (r.latency.stages.tts_ttfb?.p50 ?? NaN);
+  check("the three tiling stages sum to first audio", sum === r.latency.first_audio?.p50, `${sum} vs ${r.latency.first_audio?.p50}`);
 }
 
 // ---- closed fields stay out of the model statistics
@@ -118,30 +140,61 @@ function report(over: Partial<{ calls: CallLite[]; turns: TurnRow[]; fieldEvents
   check("the simulated count is still reported", r.totals.simulated === 1, String(r.totals.simulated));
 }
 
-// ---- null tokens do not poison the totals
+// ---- null tokens do not poison the totals, and a missing model does not either
+// (regression for Important 1: a turn with real tokens but no model used to
+// drop both counts from the grand total because the loop skipped the whole
+// turn on `!t.model`, not just the by_model entry)
 {
   const r = report({
     turns: [
       turn({ prompt_tokens: 100, completion_tokens: 10 }),
       turn({ prompt_tokens: null, completion_tokens: null, model: null }),
+      turn({ prompt_tokens: 50, completion_tokens: 5, model: null }),
     ],
   });
-  check("null tokens are skipped, not summed as zero", r.usage.prompt_tokens === 100, String(r.usage.prompt_tokens));
+  check("null tokens are skipped, not summed as zero", r.usage.prompt_tokens === 150, String(r.usage.prompt_tokens));
+  check(
+    "a turn with real tokens but no model still reaches the total",
+    r.usage.completion_tokens === 15,
+    String(r.usage.completion_tokens)
+  );
   check("a turn with no model is not a model key", Object.keys(r.usage.by_model).length === 1, JSON.stringify(Object.keys(r.usage.by_model)));
+}
+
+// ---- by_model, including the calls counter, and a second model getting its own row
+{
+  const r = report({
+    turns: [
+      turn({ model: "gpt-4o-mini", prompt_tokens: 100, completion_tokens: 10 }),
+      turn({ model: "gpt-4o-mini", prompt_tokens: 200, completion_tokens: 20 }),
+      turn({ model: "claude-haiku", prompt_tokens: 50, completion_tokens: 5 }),
+    ],
+  });
+  const mini = r.usage.by_model["gpt-4o-mini"];
+  const haiku = r.usage.by_model["claude-haiku"];
+  check("by_model sums tokens per model", mini?.prompt_tokens === 300 && mini?.completion_tokens === 30, JSON.stringify(mini));
+  check("by_model counts calls per model", mini?.calls === 2, String(mini?.calls));
+  check("a second model gets its own row", haiku?.prompt_tokens === 50 && haiku?.calls === 1, JSON.stringify(haiku));
 }
 
 // ---- thin data
 {
   const thin = report({ calls: [call()] });
   check("one call is thin", thin.thin === true);
-  check("the threshold is reported so the page can say it", thin.thin_threshold === THIN_DATA_MIN_CALLS);
-  check("a thin window yields no trend", thin.trend.length === 0, `got ${thin.trend.length}`);
+  // Compared against the literal, not the constant the module built the number
+  // from - `thin_threshold === THIN_DATA_MIN_CALLS` is green no matter what
+  // that constant is set to, which is exactly what `budget_ms === 800` below
+  // already gets right.
+  check("the threshold is reported so the page can say it", thin.thin_threshold === 10, String(thin.thin_threshold));
 
   const fat = report({
     calls: Array.from({ length: THIN_DATA_MIN_CALLS }, (_, i) => call({ id: `c${i}` })),
   });
   check("ten calls is not thin", fat.thin === false);
-  check("a fat window yields a trend", fat.trend.length > 0);
+  // Every one of the ten fixture calls shares the same `started_at`, so the
+  // trend the fat window yields has to be exactly one day, not merely "some".
+  check("a fat window yields a trend with one bucket for the one day it covers", fat.trend.length === 1, String(fat.trend.length));
+  check("a thin window yields no trend", thin.trend.length === 0, `got ${thin.trend.length}`);
 }
 
 // ---- accuracy
@@ -161,6 +214,25 @@ function report(over: Partial<{ calls: CallLite[]; turns: TurnRow[]; fieldEvents
   check("median duration", r.accuracy.median_duration_s === 100, String(r.accuracy.median_duration_s));
   check("handoff reasons are counted", r.totals.by_handoff_reason.CONFUSION === 1);
   check("outcomes are counted", r.totals.by_outcome.submitted === 1 && r.totals.by_outcome.handoff === 1);
+}
+
+// ---- a call with an unmeasured hands-free count is skipped from both sums
+// (regression for Important 2: `?? 0` on either side used to assert "captured
+// nothing" about a call whose numerator, or denominator, was never measured)
+{
+  const r = report({
+    calls: [
+      call({ id: "a", fields_hands_free: 10, fields_total: 15 }),
+      call({ id: "b", fields_hands_free: null, fields_total: 15 }),
+      call({ id: "c", fields_hands_free: 5, fields_total: null }),
+    ],
+    turns: [turn({ call_id: "a" })],
+  });
+  check(
+    "a call missing either side of the hands-free count is dropped from both sums, not summed as zero",
+    r.accuracy.hands_free_captured === 10 && r.accuracy.hands_free_total === 15,
+    `${r.accuracy.hands_free_captured}/${r.accuracy.hands_free_total}`
+  );
 }
 
 // ---- per-field accuracy
@@ -183,6 +255,83 @@ function report(over: Partial<{ calls: CallLite[]; turns: TurnRow[]; fieldEvents
   check("a field asked once is captured first try", street?.captured_first_try === 1, String(street?.captured_first_try));
   check("mean confidence ignores the nulls", street?.mean_confidence === 0.95, String(street?.mean_confidence));
   check("fields are sorted worst first", r.fields[0]?.id === "email", String(r.fields[0]?.id));
+}
+
+// ---- a prefilled field the engine only confirmed was never asked
+// (regression for Important 3: the engine announces every prefilled field
+// before the opener speaks, so a field the web journey already had emits a
+// `field.update` without the agent ever asking for it. Gating "asked" on
+// `attempts === 0` counted that announcement as a first-try capture and
+// flattered the headline number with fields the agent never won.)
+{
+  const events: FieldEventRow[] = [
+    { call_id: "a", field: "plan_id", state: "prefilled", confidence: null, attempts: 0 },
+    { call_id: "a", field: "plan_id", state: "confirmed", confidence: 0.99, attempts: 0 },
+    // Asked, then the call dropped before it was ever confirmed or submitted.
+    { call_id: "b", field: "postcode", state: "asking", confidence: null, attempts: 0 },
+  ];
+  const r = report({ calls: [call({ id: "a" }), call({ id: "b" })], fieldEvents: events });
+  check(
+    "a field only ever prefilled and confirmed is not counted as asked at all",
+    !r.fields.some((f) => f.id === "plan_id"),
+    JSON.stringify(r.fields.map((f) => f.id))
+  );
+  const postcode = r.fields.find((f) => f.id === "postcode");
+  check(
+    "a field that was asked but never confirmed is asked, not captured",
+    postcode?.asked === 1 && postcode?.captured_first_try === 0,
+    JSON.stringify(postcode)
+  );
+}
+
+// ---- a redacted field is asked but never a capture, and is still tallied redacted
+{
+  const events: FieldEventRow[] = [
+    { call_id: "a", field: "card_number", state: "asking", confidence: null, attempts: 0 },
+    { call_id: "a", field: "card_number", state: "redacted", confidence: null, attempts: 0 },
+  ];
+  const r = report({ calls: [call({ id: "a" })], fieldEvents: events });
+  const card = r.fields.find((f) => f.id === "card_number");
+  check("a redacted field is asked but not captured first try", card?.asked === 1 && card?.captured_first_try === 0, JSON.stringify(card));
+  check("a redacted field is tallied", card?.redacted === 1, String(card?.redacted));
+}
+
+// ---- latency.stages carries its own min/max/n per stage, not just first_audio
+{
+  const r = report({
+    turns: [
+      turn({ think_ms: 100, wire_wait_ms: 10, tts_ttfb_ms: 20 }),
+      turn({ think_ms: 300, wire_wait_ms: 30, tts_ttfb_ms: 60 }),
+    ],
+  });
+  check("the think stage counts both turns", r.latency.stages.think?.n === 2, String(r.latency.stages.think?.n));
+  check(
+    "the think stage reports its own min and max",
+    r.latency.stages.think?.min === 100 && r.latency.stages.think?.max === 300,
+    JSON.stringify(r.latency.stages.think)
+  );
+  check(
+    "the wire_wait stage reports its own min and max",
+    r.latency.stages.wire_wait?.min === 10 && r.latency.stages.wire_wait?.max === 30,
+    JSON.stringify(r.latency.stages.wire_wait)
+  );
+  check(
+    "the tts_ttfb stage reports its own min and max",
+    r.latency.stages.tts_ttfb?.min === 20 && r.latency.stages.tts_ttfb?.max === 60,
+    JSON.stringify(r.latency.stages.tts_ttfb)
+  );
+}
+
+// ---- the histogram's buckets account for every turn, including one far past the last edge
+{
+  const r = report({
+    turns: [turn({ first_audio_ms: 100 }), turn({ first_audio_ms: 5000 })],
+  });
+  const total = r.latency.histogram.reduce((sum, bucket) => sum + bucket.count, 0);
+  check("histogram bucket counts sum to n", total === r.latency.first_audio?.n, `${total} vs ${r.latency.first_audio?.n}`);
+  const last = r.latency.histogram[r.latency.histogram.length - 1];
+  check("the last bucket is open-ended", last?.to_ms === null);
+  check("the open-ended last bucket catches a value far past every fixed edge", last?.count === 1, String(last?.count));
 }
 
 // ---- over budget

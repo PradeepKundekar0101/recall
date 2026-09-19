@@ -88,14 +88,32 @@ function histogram(values: number[]): { from_ms: number; to_ms: number | null; c
 function fieldStats(events: AnalyticsInput["fieldEvents"]): FieldStat[] {
   // Per field per call, because "re-asked" is a fact about one call's attempt at
   // one field, not about the field across the whole window.
-  const perCall = new Map<string, { field: string; attempts: number; redacted: boolean }>();
+  const perCall = new Map<
+    string,
+    { field: string; attempts: number; redacted: boolean; reachedAsking: boolean; reachedCaptureEnd: boolean }
+  >();
   const confidences = new Map<string, number[]>();
 
   for (const event of events) {
     const key = `${event.call_id}:${event.field}`;
-    const seen = perCall.get(key) ?? { field: event.field, attempts: 0, redacted: false };
+    const seen = perCall.get(key) ?? {
+      field: event.field,
+      attempts: 0,
+      redacted: false,
+      reachedAsking: false,
+      reachedCaptureEnd: false,
+    };
     seen.attempts = Math.max(seen.attempts, event.attempts);
     if (event.state === "redacted") seen.redacted = true;
+    // `asking` is the gate for "asked" on purpose: the engine announces every
+    // prefilled field before the opener even speaks (dialogue.ts, the walk
+    // that fires `field.update` for whatever the lead already carried), so a
+    // prefilled field emits an event without ever being asked. Counting it as
+    // asked - and then as captured on the first try, since no attempt was ever
+    // charged against it - would flatter the accuracy number with fields the
+    // web journey had already filled in, not fields the agent actually won.
+    if (event.state === "asking") seen.reachedAsking = true;
+    if (event.state === "confirmed" || event.state === "submitted") seen.reachedCaptureEnd = true;
     perCall.set(key, seen);
 
     if (typeof event.confidence === "number" && Number.isFinite(event.confidence)) {
@@ -107,11 +125,12 @@ function fieldStats(events: AnalyticsInput["fieldEvents"]): FieldStat[] {
 
   const byField = new Map<string, FieldStat>();
   for (const seen of perCall.values()) {
+    if (!seen.reachedAsking) continue;
     const stat =
       byField.get(seen.field) ??
       ({ id: seen.field, asked: 0, captured_first_try: 0, re_asks: 0, mean_confidence: null, redacted: 0 } as FieldStat);
     stat.asked += 1;
-    if (seen.attempts === 0) stat.captured_first_try += 1;
+    if (seen.reachedCaptureEnd && seen.attempts === 0) stat.captured_first_try += 1;
     stat.re_asks += seen.attempts;
     if (seen.redacted) stat.redacted += 1;
     byField.set(seen.field, stat);
@@ -165,8 +184,17 @@ export function buildAnalytics(input: AnalyticsInput): AnalyticsResponse {
 
   const thin = calls.length < THIN_DATA_MIN_CALLS;
 
-  const handsFreeCaptured = calls.reduce((sum, c) => sum + (c.fields_hands_free ?? 0), 0);
-  const handsFreeTotal = calls.reduce((sum, c) => sum + (c.fields_total ?? 0), 0);
+  // A call with a null count of either kind has an unknown hands-free rate, not
+  // a rate of zero: `?? 0` on just one side would assert "captured nothing"
+  // about a call whose numerator was never measured. Skip the whole call from
+  // both sums unless both sides are real numbers.
+  let handsFreeCaptured = 0;
+  let handsFreeTotal = 0;
+  for (const c of calls) {
+    if (typeof c.fields_hands_free !== "number" || typeof c.fields_total !== "number") continue;
+    handsFreeCaptured += c.fields_hands_free;
+    handsFreeTotal += c.fields_total;
+  }
   const durations = numbers(calls, (c) => c.duration_s);
 
   const firstAudio = numbers(turns, (t) => t.first_audio_ms);
@@ -175,14 +203,28 @@ export function buildAnalytics(input: AnalyticsInput): AnalyticsResponse {
   let promptTokens = 0;
   let completionTokens = 0;
   for (const t of turns) {
-    if (typeof t.prompt_tokens !== "number" || typeof t.completion_tokens !== "number" || !t.model) continue;
-    promptTokens += t.prompt_tokens;
-    completionTokens += t.completion_tokens;
-    const entry = byModel[t.model] ?? { prompt_tokens: 0, completion_tokens: 0, calls: 0 };
-    entry.prompt_tokens += t.prompt_tokens;
-    entry.completion_tokens += t.completion_tokens;
-    entry.calls += 1;
-    byModel[t.model] = entry;
+    // The grand total and the by-model breakdown are two different questions,
+    // gated independently. A turn can carry real spend with no model on record
+    // (a logging gap), and dropping its tokens from the grand total because it
+    // has no model key would be exactly the zero-for-missing this file exists
+    // to avoid - so the total is gated only on the tokens being real numbers.
+    // Likewise a model can be known on a turn whose token counts did not land;
+    // that turn still counts as a call against the model, it just does not
+    // contribute tokens to that model's row.
+    const hasTokens = typeof t.prompt_tokens === "number" && typeof t.completion_tokens === "number";
+    if (hasTokens) {
+      promptTokens += t.prompt_tokens as number;
+      completionTokens += t.completion_tokens as number;
+    }
+    if (typeof t.model === "string" && t.model.length > 0) {
+      const entry = byModel[t.model] ?? { prompt_tokens: 0, completion_tokens: 0, calls: 0 };
+      if (hasTokens) {
+        entry.prompt_tokens += t.prompt_tokens as number;
+        entry.completion_tokens += t.completion_tokens as number;
+      }
+      entry.calls += 1;
+      byModel[t.model] = entry;
+    }
   }
 
   const byKind = {} as Record<TurnKind, Stats | null>;
