@@ -11,6 +11,10 @@ if (existsSync(rootEnv)) loadEnv({ path: rootEnv });
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // The dev-tools badge sits in the bottom-left corner, which is exactly where
+  // the payload drawer's title lives, and the demo runs on the dev server. The
+  // error overlay is unaffected by this.
+  devIndicators: false,
   // @recall/shared ships TypeScript source rather than a build step, so the
   // orchestrator and the console cannot drift out of sync behind a stale dist.
   transpilePackages: ["@recall/shared"],
