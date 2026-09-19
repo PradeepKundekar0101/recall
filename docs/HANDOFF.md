@@ -110,6 +110,12 @@ The symptom from the operator's chair is a full, convincing journey transcript a
 Two things give it away: every customer turn scores exactly 95%, which is `SimTransport`'s default confidence, and the whole conversation - opener, consent, a re-ask and a six-second silence nudge - spans six seconds of wall clock, which no spoken call can do.
 `POST /calls` has always returned `simulated: true` for this, but the console threw the field away; it now shows `SIMULATED - NO PHONE DIALLED` in place of the TEST RUN chip and says so in the notice bar.
 
+**The console 404s on every route when file descriptors run out.**
+Next's dev watcher takes one descriptor per watched directory, and a GUI-launched process gets 256 of them (`launchctl limit maxfiles`).
+With the pnpm store walked and a pile of orchestrator watchers already holding thousands, watchpack raises `EMFILE: too many open files`, the app directory scan comes back empty, and every route 404s - while the root layout still renders, so the tab title is right and the page is not.
+`next build` succeeds throughout, which is what makes it read as a code problem when it is a descriptor problem.
+`apps/web` now raises its own limit in the `dev` script and `next.config.mjs` keeps the watcher out of `node_modules`; if it returns, the log line to look for is `EMFILE`, not anything about routing.
+
 **The TTS model has to be one the voice is fine-tuned on.**
 The Australian brand voice is a professional clone whose `eleven_flash_v2_5` fine-tune is `failed` on ElevenLabs' side, so v2.5 rendered it flat and synthetic on the first journey call.
 `GET /v1/voices/{id}` shows `fine_tuning.state` per model; `TTS_MODEL` is now `eleven_flash_v2`, which is fine-tuned and within 30 ms of v2.5 to first audio.
