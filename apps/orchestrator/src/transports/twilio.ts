@@ -576,7 +576,15 @@ export class TwilioTransport implements Transport {
       await this.api()
         .calls(this.twilioCallSid)
         .update({
-          twiml: `<Response><Dial answerOnBridge="true"><Number url="${env.publicBaseUrl}/twilio/whisper?text=${encodeURIComponent(whisper)}">${toNumber}</Number></Dial></Response>`,
+          // `action` is what happens when the Dial ends, and it has to be there
+          // whether or not anyone answered: the <Dial> is the last verb in this
+          // document, so without it a transfer nobody picks up drops the
+          // customer in silence, a second after being told a colleague is
+          // coming. That is what happened on the seventh journey call.
+          twiml:
+            `<Response><Dial answerOnBridge="true" action="${env.publicBaseUrl}/twilio/handoff-result/${this.id}" method="POST">` +
+            `<Number url="${env.publicBaseUrl}/twilio/whisper?text=${encodeURIComponent(whisper)}">${toNumber}</Number>` +
+            `</Dial></Response>`,
         });
     } catch (err) {
       // Nobody was dialled, so the call is still ours and the documented

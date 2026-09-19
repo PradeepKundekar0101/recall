@@ -162,7 +162,16 @@ console.log("\n-- warm transfer");
     ended = reason;
   });
   await transport.transfer(env.handoffNumber, "Recovery call, Priya, escalated for CONFUSION.");
-  check("the live call is redirected to a Dial with a whisper", twilio.updates.some((u) => /<Dial answerOnBridge="true"><Number url=/.test(String(u.twiml))));
+  check("the live call is redirected to a Dial with a whisper", twilio.updates.some((u) => /<Dial [^>]*answerOnBridge="true"[^>]*><Number url=/.test(String(u.twiml))));
+  // The seventh journey call: the human did not pick up, the <Dial> was the last
+  // verb in the document, and Twilio hung the customer up in silence one second
+  // after they were told a colleague was coming. An action URL is where a
+  // transfer that found nobody gets to say so.
+  check(
+    "the Dial has somewhere to go when nobody answers",
+    twilio.updates.some((u) => /<Dial [^>]*action="[^"]*\/twilio\/handoff-result\/check-transfer"/.test(String(u.twiml))),
+    String(twilio.updates.at(-1)?.twiml)
+  );
   check("the transport ends as transferred", ended === "transferred", String(ended));
 
   const before = twilio.updates.length;

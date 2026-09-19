@@ -395,7 +395,7 @@ The child leg `CA414c1085` shows `no-answer` after 1 second, and the customer's 
 This is not the fifth call's bug coming back: Twilio's event log for `CA0d7dea` has only two updates from us, the original create and the `<Dial>` redirect, and no `status=completed` at all.
 The `<Dial>` is simply the last verb in the document, so when it ended the call fell off the end of its TwiML and Twilio hung it up.
 From the customer's chair: "I'm going to get a colleague to help you", a pause, and then nothing.
-Unfixed, and the one known hole left in the handoff - see Pending.
+Fixed by giving the `<Dial>` an `action` URL. `/twilio/handoff-result/:callId` answers it: `completed` means the human took the call and there is nothing left to say, and anything else gets an honest sentence - "I couldn't reach a colleague just now, someone will call you straight back" - before the line goes down. The escalation packet is already on the human console with the transcript, which is what that sentence is promising. What is *not* built is taking a callback time by voice: the media stream is gone and the engine has finalised by then.
 
 ## What to watch on the next journey call
 
@@ -419,7 +419,8 @@ Unfixed, and the one known hole left in the handoff - see Pending.
 
 - The journey has run over a real phone once and failed on the line. It has not yet completed over a real phone; everything below assumes that happens first.
 - ~~Warm handoff `<Dial>` transfer has never rung the second handset live.~~ Done on the sixth call: the handset rang, the human answered, the whisper played, and the bridge held for 87 seconds.
-- **Nothing happens for the customer when the human does not answer.** The `<Dial>` is the last verb in the document, so when the seventh call's handoff went unanswered the Dial ended after a second and Twilio hung the customer up in silence. They had just been told a colleague was coming. This is the one known hole left in the handoff and it needs an `action` URL on the `<Dial>` with something to say.
+- ~~Nothing happens for the customer when the human does not answer.~~ Fixed: the `<Dial>` carries an `action` URL now, and `/twilio/handoff-result/:callId` says "I couldn't reach a colleague just now, someone will call you straight back" before hanging up. Untested on a real unanswered transfer - the route itself is exercised by hand, the TwiML is right, but nobody has declined a live handoff since.
+- Taking a callback time by voice when the handoff misses is **not** built. The media stream is gone by then and the engine has finalised, so reviving the voice loop after a `<Dial>` is a real change, not a tweak. The human console has the packet, which is what the apology is promising.
 - The operator console has never been watched during a real call.
 
 **Waiting on CIMET**

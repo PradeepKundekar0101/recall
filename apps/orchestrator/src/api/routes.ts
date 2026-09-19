@@ -165,6 +165,36 @@ api.all("/twilio/whisper", (req, res) => {
   res.type("text/xml").send(`<Response><Say voice="Polly.Nicole">${escapeXml(text)}</Say></Response>`);
 });
 
+/**
+ * What happens when the warm transfer ends, answered or not.
+ *
+ * The `<Dial>` is the last verb in the document the transfer redirects to, so
+ * without an action URL the customer's call falls off the end of its TwiML the
+ * moment the Dial finishes. On the seventh journey call the human did not pick
+ * up, the Dial ended after a second, and the customer was hung up on in silence
+ * - one second after being told a colleague was coming.
+ *
+ * `completed` means the human took the call and it is over, so there is nothing
+ * left to say. Anything else means nobody was reached, and the customer is owed
+ * an honest sentence before the line goes down. The escalation packet is
+ * already on the human console with the transcript, which is what "we'll call
+ * you back" is promising.
+ */
+api.post("/twilio/handoff-result/:callId", (req, res) => {
+  const status = String(req.body?.DialCallStatus ?? "");
+  log.call(req.params.callId, `handoff dial ended: ${status || "no status"}`);
+
+  if (status === "completed") return res.type("text/xml").send(`<Response><Hangup/></Response>`);
+
+  return res
+    .type("text/xml")
+    .send(
+      `<Response><Say voice="Polly.Nicole">` +
+        `I'm sorry - I couldn't reach a colleague just now. Someone will call you straight back. Thanks for your time.` +
+        `</Say><Hangup/></Response>`
+    );
+});
+
 api.post("/twilio/amd/:callId", (req, res) => {
   const transport = liveTwilioTransports.get(req.params.callId);
   transport?.notifyAmd(String(req.body?.AnsweredBy ?? ""));
