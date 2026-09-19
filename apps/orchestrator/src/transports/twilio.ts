@@ -5,8 +5,10 @@ import { log } from "../log.js";
 import { openStt, type SttSession } from "../voice/stt.js";
 import type { SttOpener } from "../voice/stt/types.js";
 import { synthesize } from "../voice/tts.js";
+import { publishAgentAudio } from "../monitor.js";
 import type {
   AudioMeta,
+  Playout,
   SpeakResult,
   Transport,
   TransportDeps,
@@ -116,11 +118,35 @@ export class TwilioTransport implements Transport {
   private bargeInCb: (() => void) | null = null;
   private endedCb: ((reason: TransportEndReason) => void) | null = null;
 
-  /** Resolver for the mark that signals "playback finished". */
+  /**
+   * What each outstanding mark does when it comes back.
+   *
+   * One per sentence, not one per line. Twilio acknowledges a mark when the
+   * audio queued in front of it has actually played out, so a mark returning is
+   * the only evidence this process ever gets that a particular sentence was
+   * heard rather than merely written.
+   */
   private markResolvers = new Map<string, () => void>();
   private speaking = false;
   private dead = false;
   private framesSent = 0;
+
+  /**
+   * Playout, as opposed to transmission.
+   *
+   * Frames go into Twilio's buffer an order of magnitude faster than they
+   * play, so "the last frame written" is not "the last thing heard" - on a
+   * two-sentence reply the two are the better part of a second apart. Every
+   * gate that asks "is our voice in the customer's room right now" has to be
+   * answered from marks coming back, which is what these three fields are.
+   */
+  private ttsPlaying = false;
+  private ttsEndedAt = 0;
+  /** The sentences of the current utterance whose marks Twilio has echoed back. */
+  private playedSentences: string[] = [];
+  private utteranceSeq = 0;
+  /** The line on the wire now, and how much of it has been acknowledged. */
+  private utterance: AgentUtterance | null = null;
 
   /**
    * Echo defence. On a speakerphone our own playback leaks back into the customer's
@@ -187,6 +213,23 @@ export class TwilioTransport implements Transport {
     const streamUrl = `${env.publicBaseUrl.replace(/^https/, "wss")}/media/${this.opts.callId}`;
     log.call(this.id, `TEST RUN - dialling ${to} for lead ${this.opts.lead.id}`);
 
+    /**
+     * Inbound audio only - and there is nothing to configure.
+     *
+     * A bidirectional `<Connect><Stream>` can only ever receive the inbound
+     * track; Twilio documents `track` as a `<Start><Stream>` attribute and
+     * states plainly that a Connect stream gives you the inbound track alone.
+     * So nothing we play is looped back to us here, and writing
+     * `track="inbound_track"` would be an unsupported attribute on the one
+     * piece of TwiML every call depends on, for a default we already have.
+     *
+     * Worth being explicit about what that does and does not buy: it means the
+     * agent's voice never returns to us *down the outbound leg*. It does
+     * nothing about the customer's speakerphone re-emitting that voice into
+     * their own microphone, which arrives here as genuine inbound caller audio
+     * and is indistinguishable from speech at this layer. That is acoustic
+     * echo, and the half-duplex gate in the engine is what answers it.
+     */
     const call = await this.api().calls.create({
       to,
       from: env.twilioFrom,
@@ -276,8 +319,11 @@ export class TwilioTransport implements Transport {
         case "mark": {
           const name = msg.mark?.name;
           if (name) {
-            this.markResolvers.get(name)?.();
+            // Twilio only sends this once the audio in front of it has played
+            // out, which is what makes it evidence of being heard.
+            const played = this.markResolvers.get(name);
             this.markResolvers.delete(name);
+            played?.();
           }
           break;
         }
@@ -320,7 +366,7 @@ export class TwilioTransport implements Transport {
           this.clearPlayback();
           this.bargeInCb?.();
         },
-        onFinal: (text, confidence) => {
+        onFinal: (text, confidence, meta) => {
           const startedAt = this.utteranceStartedAt;
           this.utteranceStartedAt = null;
           // Our own line coming back at us is not the customer speaking.
@@ -334,7 +380,11 @@ export class TwilioTransport implements Transport {
             this.clearPlayback();
             this.bargeInCb?.();
           }
-          this.utteranceCb?.(text, confidence, { startedAt });
+          this.utteranceCb?.(text, confidence, {
+            startedAt,
+            speechMs: meta?.speechMs ?? null,
+            words: meta?.words ?? null,
+          });
         },
         onError: (err) => log.call(this.id, `stt error: ${err.message}`),
         onClose: () => log.call(this.id, "stt socket closed"),
@@ -412,17 +462,13 @@ export class TwilioTransport implements Transport {
     this.bargeArmed = false;
     this.lastSpokenTokens = tokenize(text);
 
+    const utterance = this.beginUtterance();
+
     // `speaking` flips on with the first frame, not before: a customer utterance
     // that lands while we are still synthesising is a queued turn, not a barge-in.
     let started = false;
-    let firstFrameAt = 0;
     let totalBytes = 0;
     let frames = 0;
-    // Every sentence goes to Twilio's buffer the moment it is synthesised, so
-    // "sent" says nothing about "heard". Each one's duration does: against the
-    // clock since the first frame, it says which sentences had finished playing
-    // when the customer cut in.
-    const sent: { text: string; ms: number }[] = [];
     // Only the parts that actually reached the wire count toward the line's
     // meta - a barge-in stops the loop before the rest are even awaited, and
     // reporting their cost would describe a reply that was never heard.
@@ -435,13 +481,14 @@ export class TwilioTransport implements Transport {
       if (!audio || !audio.length) continue;
       if (!started) {
         this.speaking = true;
+        this.ttsPlaying = true;
         started = true;
-        firstFrameAt = Date.now();
         opts.onFirstAudio?.();
       }
 
-      frames += this.sendFrames(audio);
-      sent.push({ text: parts[i] as string, ms: (audio.length / 8000) * 1000 });
+      // Frames and then a mark of this sentence's own, so what comes back
+      // names which sentence was heard rather than only that the line ended.
+      frames += this.sendSentence(utterance, parts[i] as string, audio);
       totalBytes += audio.length;
       const meta = partMetas[i];
       if (meta) usedMetas.push(meta);
@@ -461,36 +508,123 @@ export class TwilioTransport implements Transport {
 
     if (!totalBytes || this.dead || !this.ws || !this.streamSid || !this.speaking) {
       if (!totalBytes) log.call(this.id, "WARN TTS returned zero bytes");
-      this.speaking = false;
-      this.playbackEndedAt = Date.now();
-      return { completed: false, heard: heardBy(sent, firstFrameAt) };
+      this.endPlayout();
+      return { completed: false, heard: this.playedText };
     }
-
-    const markName = `m${Date.now()}${Math.floor(Math.random() * 1000)}`;
-    this.ws.send(JSON.stringify({ event: "mark", streamSid: this.streamSid, mark: { name: markName } }));
 
     log.call(this.id, `spoke ${frames} frames (${(frames * 20) / 1000}s) "${text.slice(0, 40)}"`);
 
-    await new Promise<void>((resolve) => {
-      // Resolve on the mark, on barge-in clearing us, or on a hard ceiling so a
-      // dropped mark can never wedge the call.
-      const ceiling = setTimeout(() => {
-        this.markResolvers.delete(markName);
-        resolve();
-      }, Math.max(4000, (totalBytes / 8000) * 1000 + 2500));
+    await this.awaitUtterance(utterance, Math.max(4000, (totalBytes / 8000) * 1000 + 2500));
 
-      this.markResolvers.set(markName, () => {
+    // Cut is recorded when the line is cleared, rather than inferred from a
+    // flag the successful path also clears. What was heard is now Twilio's own
+    // answer - the sentences whose marks came back - instead of an estimate
+    // from elapsed time against each sentence's duration.
+    return utterance.cut
+      ? { completed: false, heard: this.playedText }
+      : { completed: true, heard: text };
+  }
+
+  // -------------------------------------------------------------- playout
+
+  /**
+   * Opens a new agent utterance. Everything about "what have they heard" is
+   * scoped to the line currently on the wire: the question that matters is
+   * whether *this* line is in the customer's room, not what was said a minute
+   * ago.
+   */
+  private beginUtterance(): AgentUtterance {
+    const utterance: AgentUtterance = {
+      id: `u${++this.utteranceSeq}`,
+      sentences: [],
+      acked: 0,
+      closed: false,
+      cut: false,
+      finish: null,
+    };
+    this.utterance = utterance;
+    this.playedSentences = [];
+    return utterance;
+  }
+
+  /** One sentence's frames, followed by the mark that reports it was heard. */
+  private sendSentence(utterance: AgentUtterance, text: string, audio: Buffer): number {
+    const index = utterance.sentences.length;
+    utterance.sentences.push(text);
+    const frames = this.sendFrames(audio);
+    if (!this.ws || !this.streamSid) return frames;
+
+    const name = `${utterance.id}:${index}`;
+    this.markResolvers.set(name, () => {
+      // Marks are acknowledged in order, but `acked` is raised monotonically
+      // rather than assigned, so a duplicate or a late one cannot walk the
+      // played text backwards.
+      utterance.acked = Math.max(utterance.acked, index + 1);
+      if (this.utterance === utterance) {
+        this.playedSentences = utterance.sentences.slice(0, utterance.acked);
+      }
+      this.settleIfPlayedOut(utterance);
+    });
+    this.ws.send(JSON.stringify({ event: "mark", streamSid: this.streamSid, mark: { name } }));
+    return frames;
+  }
+
+  /** Resolves the line once its last sentence has been acknowledged. */
+  private settleIfPlayedOut(utterance: AgentUtterance): void {
+    if (!utterance.closed || utterance.acked < utterance.sentences.length) return;
+    this.endPlayout();
+    const finish = utterance.finish;
+    utterance.finish = null;
+    finish?.();
+  }
+
+  /** No more sentences are coming; wait for the ones sent to be heard. */
+  private awaitUtterance(utterance: AgentUtterance, ceilingMs: number): Promise<void> {
+    utterance.closed = true;
+    if (utterance.acked >= utterance.sentences.length) {
+      // Everything was acknowledged while we were still writing. Short lines on
+      // a fast wire really do land here.
+      this.endPlayout();
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      const ceiling = setTimeout(() => {
+        // A dropped mark must never wedge the call. The line is treated as
+        // heard whole, because it was written whole and nothing cut it.
+        for (let i = 0; i < utterance.sentences.length; i++) {
+          this.markResolvers.delete(`${utterance.id}:${i}`);
+        }
+        utterance.finish = null;
+        this.endPlayout();
+        resolve();
+      }, ceilingMs);
+      utterance.finish = () => {
         clearTimeout(ceiling);
         resolve();
-      });
+      };
     });
+  }
 
-    // A barge-in clears `speaking` before it resolves the mark; Twilio's own
-    // mark leaves it set. That is the difference between cut and completed.
-    const completed = this.speaking;
+  /** The wire is quiet. Everything that gates on our own voice reads these. */
+  private endPlayout(): void {
     this.speaking = false;
-    this.playbackEndedAt = Date.now();
-    return completed ? { completed: true, heard: text } : { completed: false, heard: heardBy(sent, firstFrameAt) };
+    this.ttsPlaying = false;
+    this.ttsEndedAt = Date.now();
+    this.playbackEndedAt = this.ttsEndedAt;
+  }
+
+  /** The sentences of the line on the wire that Twilio says have played. */
+  private get playedText(): string {
+    return this.playedSentences.join(" ");
+  }
+
+  playout(): Playout {
+    return { ttsPlaying: this.ttsPlaying, ttsEndedAt: this.ttsEndedAt, playedText: this.playedText };
+  }
+
+  /** The engine's half-duplex gate, deciding a barge-in the transport let past. */
+  stopPlayback(): void {
+    this.clearPlayback();
   }
 
   /**
@@ -521,6 +655,7 @@ export class TwilioTransport implements Transport {
     let spoken = "";
     let started = false;
     this.interruptible = true;
+    const utterance = this.beginUtterance();
 
     for await (const sentence of sentences) {
       if (signal?.aborted || this.dead || !this.ws || !this.streamSid) break;
@@ -534,17 +669,22 @@ export class TwilioTransport implements Transport {
 
       if (!started) {
         this.speaking = true;
+        this.ttsPlaying = true;
         started = true;
         this.bargeArmed = false;
         onFirstAudio?.();
       }
       spoken += `${sentence} `;
       this.lastSpokenTokens = tokenize(spoken);
-      this.sendFrames(audio);
+      // A generated reply is marked per sentence for the same reason a scripted
+      // one is: the gate has to know which half of it the customer heard.
+      this.sendSentence(utterance, sentence, audio);
     }
 
     if (started) {
-      await this.awaitPlayback();
+      // 20 s was the old ceiling here and it stays: a generated reply has no
+      // total byte count to size a ceiling from until it has finished arriving.
+      await this.awaitUtterance(utterance, 20_000);
     }
     return spoken.trim();
   }
@@ -552,6 +692,17 @@ export class TwilioTransport implements Transport {
   /** Splits one buffer into 20 ms frames and puts them on the wire. */
   private sendFrames(audio: Buffer): number {
     if (!this.ws || !this.streamSid) return 0;
+
+    /**
+     * The local monitor's tap, and the only one.
+     *
+     * Every route to Twilio goes through here - a line synthesised just now, a
+     * fixed line served from the pre-render cache, a sentence of a streamed
+     * reply - so there is no second write path to remember to tap. Agent audio
+     * only: the inbound track never reaches this function.
+     */
+    publishAgentAudio(this.id, audio);
+
     let frames = 0;
     for (let off = 0; off < audio.length; off += FRAME_BYTES) {
       const frame = audio.subarray(off, Math.min(off + FRAME_BYTES, audio.length));
@@ -566,28 +717,6 @@ export class TwilioTransport implements Transport {
     }
     this.framesSent += frames;
     return frames;
-  }
-
-  /** Waits for Twilio's mark, for barge-in to clear us, or for a hard ceiling. */
-  private async awaitPlayback(): Promise<void> {
-    if (!this.ws || !this.streamSid) return;
-    const markName = `m${Date.now()}${Math.floor(Math.random() * 1000)}`;
-    this.ws.send(JSON.stringify({ event: "mark", streamSid: this.streamSid, mark: { name: markName } }));
-
-    await new Promise<void>((resolve) => {
-      // A dropped mark must never wedge the call.
-      const ceiling = setTimeout(() => {
-        this.markResolvers.delete(markName);
-        resolve();
-      }, 20_000);
-      this.markResolvers.set(markName, () => {
-        clearTimeout(ceiling);
-        resolve();
-      });
-    });
-
-    this.speaking = false;
-    this.playbackEndedAt = Date.now();
   }
 
   /**
@@ -657,14 +786,29 @@ export class TwilioTransport implements Transport {
   private clearPlayback(): void {
     if (!this.ws || !this.streamSid) return;
     this.ws.send(JSON.stringify({ event: "clear", streamSid: this.streamSid }));
-    // Anything still waiting on a mark will never get one now.
-    for (const [name, resolve] of this.markResolvers) {
-      this.markResolvers.delete(name);
-      resolve();
-    }
-    this.speaking = false;
+
+    /**
+     * Anything still waiting on a mark will never get one now, and must not be
+     * counted as heard.
+     *
+     * This is where `playedText` is truncated to the last acknowledged mark:
+     * the resolvers are dropped rather than run, so the sentences behind them
+     * never reach `playedSentences`. The audio was in Twilio's buffer and the
+     * clear threw it away - the customer heard the sentences already
+     * acknowledged and nothing after them, and that is exactly the text the
+     * echo comparison has to be made against.
+     */
+    this.markResolvers.clear();
+
+    const utterance = this.utterance;
     this.bargeArmed = false;
-    this.playbackEndedAt = Date.now();
+    this.endPlayout();
+    if (utterance) {
+      utterance.cut = true;
+      const finish = utterance.finish;
+      utterance.finish = null;
+      finish?.();
+    }
   }
 
   /**
@@ -780,19 +924,28 @@ function takesTurn(text: string): boolean {
   return tokenize(text).size >= 3 || TURN_TAKERS.test(text);
 }
 
-/** The sentences that had finished playing `elapsed` after the first frame. */
-function heardBy(sent: { text: string; ms: number }[], firstFrameAt: number): string {
-  if (!firstFrameAt) return "";
-  const elapsed = Date.now() - firstFrameAt;
-  const heard: string[] = [];
-  let end = 0;
-  for (const part of sent) {
-    end += part.ms;
-    if (end > elapsed) break;
-    heard.push(part.text);
-  }
-  return heard.join(" ");
-}
+/**
+ * One agent line on the wire, and how much of it the far end says it played.
+ *
+ * `acked` is driven entirely by Twilio's mark acknowledgements, so it is a
+ * record of what happened rather than a prediction from durations. The
+ * previous version of this estimated it - sentence durations against elapsed
+ * time since the first frame - which is right on average and wrong exactly
+ * when the network is not, which is the case the estimate existed for.
+ */
+type AgentUtterance = {
+  id: string;
+  /** Sentences whose frames reached the wire, in order. */
+  sentences: string[];
+  /** How many of them Twilio has acknowledged as played. */
+  acked: number;
+  /** True once no further sentences will be sent. */
+  closed: boolean;
+  /** True when playback was cleared rather than allowed to finish. */
+  cut: boolean;
+  /** Resolves the `speak()` that is waiting on this line. */
+  finish: (() => void) | null;
+};
 
 /**
  * Split a reply at sentence boundaries for pipelined TTS. Numbers like "2,150"

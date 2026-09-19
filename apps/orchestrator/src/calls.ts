@@ -212,6 +212,12 @@ export async function startCall(opts: {
             }),
           onOutcome: (outcome) => void finish(outcome),
           onSubmit: (result) => bus.emitEvent(callId, { type: "submit.result", ...result }),
+          // A transcript the engine refused. Silent on the line, visible here -
+          // the operator watching the board can see the agent's own voice
+          // arriving back off a speakerphone and being thrown away, which is
+          // otherwise indistinguishable from the agent hearing nothing at all.
+          onTranscriptDropped: (text, reason, confidence) =>
+            bus.emitEvent(callId, { type: "transcript.dropped", text, reason, confidence }),
           persistField: () => {
             /* the bus subscriber in index.ts mirrors every event into call_events */
           },

@@ -167,19 +167,31 @@ export async function synthesize(opts: SpeakOptions): Promise<Buffer> {
   const text = opts.text.trim();
   if (!text) return Buffer.alloc(0);
 
-  if (opts.cacheable) {
-    const hit = memory.get(text);
-    if (hit) {
-      opts.onMeta?.({ cached: true, chars: text.length });
-      return hit;
-    }
-    const path = cachePath(text);
-    if (existsSync(path)) {
-      opts.onMeta?.({ cached: true, chars: text.length });
-      const audio = readFileSync(path);
-      memory.set(text, audio);
-      return audio;
-    }
+  /**
+   * Reading the cache is unconditional; writing to it is not.
+   *
+   * `cacheable` says "this line is fixed, keep it", and only `prerender()`
+   * passes it. It used to gate the *lookup* as well, which meant the call path
+   * - which passes no options at all - never consulted the cache and every
+   * pre-rendered line paid a full ElevenLabs round trip anyway. The whole
+   * point of rendering the opener at boot is that it plays instantly when the
+   * customer picks up; boot was spending the quota and the call was spending
+   * the latency.
+   *
+   * A line that is not in the cache is simply a miss, so looking is free and
+   * a dynamic reply still never writes anything to disk.
+   */
+  const hit = memory.get(text);
+  if (hit) {
+    opts.onMeta?.({ cached: true, chars: text.length });
+    return hit;
+  }
+  const path = cachePath(text);
+  if (existsSync(path)) {
+    opts.onMeta?.({ cached: true, chars: text.length });
+    const audio = readFileSync(path);
+    memory.set(text, audio);
+    return audio;
   }
 
   if (env.mockVoice) return mockAudio();

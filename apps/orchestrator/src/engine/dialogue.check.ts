@@ -1,5 +1,5 @@
 import type { FieldValue, Lead, TurnTiming } from "@recall/shared";
-import type { AudioMeta, SpeakResult, Transport, TransportEndReason, UtteranceMeta } from "./transport.js";
+import type { AudioMeta, Playout, SpeakResult, Transport, TransportEndReason, UtteranceMeta } from "./transport.js";
 import type { SignalReading } from "./escalation.js";
 
 /**
@@ -64,6 +64,21 @@ class FakeLine implements Transport {
   speakMs = 0;
   /** Lines that started while another was still playing. A real wire cannot do that. */
   overlaps = 0;
+
+  /**
+   * What the far end would say it has played.
+   *
+   * Driven by the scenario rather than by `speak()`, because a fake line plays
+   * instantly and the question the half-duplex gate asks - was the agent's
+   * voice in the customer's room when this was said - has no answer on a wire
+   * with no time in it. Default is "not audible", so every scenario written
+   * before this gate existed behaves exactly as it did.
+   */
+  audible = false;
+  audibleEndedAt = 0;
+  playedText = "";
+  /** Set when the engine decides a transcript was a barge-in and cuts the line. */
+  stopped = 0;
   private playing: ((result: SpeakResult) => void) | null = null;
 
   private utteranceCb: ((text: string, confidence: number | null, meta?: UtteranceMeta) => void) | null = null;
@@ -116,6 +131,16 @@ class FakeLine implements Transport {
     this.endedCb = cb;
   }
 
+  playout(): Playout {
+    return { ttsPlaying: this.audible, ttsEndedAt: this.audibleEndedAt, playedText: this.playedText };
+  }
+
+  stopPlayback(): void {
+    this.stopped++;
+    this.audible = false;
+    this.audibleEndedAt = Date.now();
+  }
+
   async transfer(toNumber: string): Promise<void> {
     this.transferredTo = toNumber;
     this.endedCb?.("transferred");
@@ -131,11 +156,23 @@ class FakeLine implements Transport {
    * line is earlier than the commit; `cuts` talks over whatever is playing, the
    * way the real transport's barge-in does.
    */
-  say(text: string, confidence = 0.9, opts: { startedAt?: number; cuts?: boolean } = {}): void {
+  say(
+    text: string,
+    confidence = 0.9,
+    opts: { startedAt?: number; cuts?: boolean; speechMs?: number; words?: number } = {}
+  ): void {
     const startedAt = opts.startedAt ?? Date.now();
     this.partialCb?.(text);
     if (opts.cuts && this.playing && this.interruptible.at(-1) !== false) this.playing({ completed: false, heard: "" });
-    setImmediate(() => this.utteranceCb?.(text, confidence, { startedAt }));
+    setImmediate(() =>
+      this.utteranceCb?.(text, confidence, {
+        startedAt,
+        // Long enough to be a turn unless the scenario says otherwise: the
+        // duration clause is about fragments, and most scenarios are not.
+        speechMs: opts.speechMs ?? 1200,
+        words: opts.words ?? null,
+      })
+    );
   }
 
   partial(text: string): void {
@@ -178,7 +215,8 @@ function lead(prefill: Record<string, FieldValue>): Lead {
   };
 }
 
-type Captured = { signals: SignalReading[]; handoff: string | null; timings: TurnTiming[] };
+type Dropped = { text: string; reason: string; confidence: number | null };
+type Captured = { signals: SignalReading[]; handoff: string | null; timings: TurnTiming[]; dropped: Dropped[] };
 
 function hooks(captured: Captured) {
   return {
@@ -195,6 +233,8 @@ function hooks(captured: Captured) {
     onOutcome: () => {},
     onSubmit: () => {},
     persistField: () => {},
+    onTranscriptDropped: (text: string, reason: string, confidence: number | null) =>
+      captured.dropped.push({ text, reason, confidence }),
     onTurnTiming: (timing: TurnTiming) => captured.timings.push(timing),
   };
 }
@@ -202,7 +242,7 @@ function hooks(captured: Captured) {
 type Deps = { extract?: Parameters<typeof createEngine>[0]["extract"] };
 
 function scenario(id: string, prefill: Record<string, FieldValue>, deps: Deps = {}) {
-  const captured: Captured = { signals: [], handoff: null, timings: [] };
+  const captured: Captured = { signals: [], handoff: null, timings: [], dropped: [] };
   const line = new FakeLine(id);
   const engine = createEngine({
     callId: id,
@@ -890,6 +930,335 @@ console.log("\n-- a turn that never reached the wire reports nothing");
       `${t.think_ms} / ${t.wire_wait_ms} / ${t.tts_ttfb_ms}`
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- the agent's own voice coming back off a speakerphone");
+{
+  /**
+   * The failure this exists for. In rehearsal the agent accepted answers the
+   * customer never gave: on speakerphone our own line is re-emitted into their
+   * handset, arrives on the inbound track as ordinary caller audio, and the
+   * VAD commits it as a turn. Nothing below the engine can tell it apart -
+   * a microphone really did pick it up.
+   *
+   * Transcribed echo is never a clean copy, so this is what one really looks
+   * like: words dropped, a name mangled, the question mark gone.
+   */
+  const { line, engine, captured } = scenario("echo-drop", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+  check("the walk reaches a read-back", /is that right/i.test(line.last()), line.last());
+
+  const readBack = line.last();
+  const spokenLines = line.spoken.length;
+  const nameBefore = engine.state.form.get("full_name")?.state;
+
+  line.audible = true;
+  line.playedText = readBack;
+  line.say("have priya sharman the 7th of march 1989 is that right", 0.88);
+  await line.settle();
+
+  check(
+    "our own line coming back is dropped as echo",
+    captured.dropped.length === 1 && captured.dropped[0]?.reason === "echo",
+    JSON.stringify(captured.dropped)
+  );
+  check("nothing is said in reply to it", line.spoken.length === spokenLines, line.last());
+  check(
+    "the read-back is not confirmed by it",
+    engine.state.form.get("full_name")?.state === nameBefore,
+    String(engine.state.form.get("full_name")?.state)
+  );
+  check("the line is not cut for it", line.stopped === 0, `${line.stopped} stop(s)`);
+
+  // And the customer, answering the same question for real a moment later,
+  // still gets through: the gate must be a filter, not a mute button.
+  line.audible = false;
+  line.audibleEndedAt = 0;
+  line.say("Yes.");
+  await line.settle();
+  check(
+    "the customer's real answer still confirms it",
+    engine.state.form.get("full_name")?.state === "confirmed",
+    String(engine.state.form.get("full_name")?.state)
+  );
+
+  await engine.finalise("incomplete");
+}
+
+{
+  // A backchannel while we are talking. Two words cannot be a turn, and on a
+  // speakerphone it is as likely to be a clipped fragment of our own sentence.
+  const { line, engine, captured } = scenario("echo-short", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+
+  const spokenLines = line.spoken.length;
+  line.audible = true;
+  line.playedText = line.last();
+  line.say("yeah okay", 0.95);
+  await line.settle();
+
+  check(
+    "a two-word segment over our own voice is dropped",
+    captured.dropped.at(-1)?.reason === "echo",
+    JSON.stringify(captured.dropped)
+  );
+  check("and nothing is said back", line.spoken.length === spokenLines, line.last());
+  await engine.finalise("incomplete");
+}
+
+{
+  // Enough words, but a fifth of a second of speech. That is a clip, not a
+  // person - and measured from the transcriber's own word timestamps rather
+  // than from wall clock, which would be measuring vendor latency.
+  const { line, engine, captured } = scenario("echo-brief", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+
+  line.audible = true;
+  line.playedText = "something else entirely";
+  line.say("no that is wrong", 0.95, { speechMs: 180 });
+  await line.settle();
+
+  check(
+    "a segment too brief to be speech is dropped",
+    captured.dropped.at(-1)?.reason === "echo",
+    JSON.stringify(captured.dropped)
+  );
+  await engine.finalise("incomplete");
+}
+
+{
+  // The other half of the gate, and the half that keeps it honest: a customer
+  // genuinely talking over the agent must get the floor. Three bars cleared at
+  // once - words, duration, and not resembling what we had just played.
+  const { line, engine, captured } = scenario("echo-bargein", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+
+  line.audible = true;
+  line.playedText = line.last();
+  line.say("sorry hang on that is not my surname at all", 0.9, { speechMs: 1400 });
+  await line.settle();
+
+  check(
+    "a real interruption over our own voice is not dropped",
+    !captured.dropped.some((d) => d.reason === "echo" && /surname/.test(d.text)),
+    JSON.stringify(captured.dropped)
+  );
+  check("and the line is cut for it", line.stopped >= 1, `${line.stopped} stop(s)`);
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- the answer gate, and what it deliberately does not gate");
+{
+  // Room noise while the agent is audible: enough words and enough speech to
+  // pass the half-duplex gate, but transcribed at a confidence that says
+  // nobody was talking to us. Dropped silently - no re-ask, because a re-ask
+  // is the agent answering the television.
+  const { line, engine, captured } = scenario("gate-low-conf", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+
+  const spokenLines = line.spoken.length;
+  line.audible = true;
+  line.playedText = "nothing like what is about to arrive";
+  line.say("mumble grumble something quite unrelated", 0.3, { speechMs: 1500 });
+  await line.settle();
+
+  check(
+    "a low-confidence segment over our own voice is dropped as low_conf",
+    captured.dropped.at(-1)?.reason === "low_conf",
+    JSON.stringify(captured.dropped)
+  );
+  check("nothing is re-asked for it", line.spoken.length === spokenLines, line.last());
+  await engine.finalise("incomplete");
+}
+
+{
+  /**
+   * The same low confidence, with the agent quiet. This is the customer on a
+   * bad line, and the re-ask they are owed is what eventually reaches a human.
+   *
+   * This is the boundary the gate is scoped on, and it is not decoration: the
+   * mumbler in `pnpm eval` answers at 0.38 and has to reach a CONFUSION
+   * handoff. A gate that dropped this silently would leave a customer nobody
+   * can hear listening to silence until the abandon timer closed the call.
+   */
+  const { line, engine, captured } = scenario("gate-not-suspect", IDENTITY_WITHOUT_DOB);
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+  const reached = await walkTo(line, /date of birth/i);
+  check("the walk reaches an open question", reached, line.last());
+
+  const spokenLines = line.spoken.length;
+  line.say("mmf shrrm at gmnl", 0.35, { speechMs: 1500 });
+  await line.settle();
+
+  check(
+    "a bad line with the agent quiet is not dropped",
+    captured.dropped.length === 0,
+    JSON.stringify(captured.dropped)
+  );
+  check("it is answered with a re-ask", line.spoken.length > spokenLines, line.last());
+  await engine.finalise("incomplete");
+}
+
+{
+  // A yes is one word and carries no value, so every clause of the answer gate
+  // would reject it - and a third of this journey's questions are closed. The
+  // gate stays out of the way of the code paths that resolve them, because the
+  // dangerous version of a phantom yes is one arriving while the agent is
+  // talking, and that dies in the half-duplex gate instead.
+  const { line, engine, captured } = scenario("gate-keeps-yes", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+
+  /**
+   * The timing that makes this safe, because it is the whole reason a one-word
+   * answer is not caught by the gate above.
+   *
+   * The gate is evaluated when a transcript *commits*, not when it was spoken,
+   * and Scribe does not commit until `STT_SILENCE_MS` of quiet has passed. So
+   * a real "Yes." said a beat after the question lands here at least
+   * 700 ms - plus the speech itself, plus the transcriber's own latency -
+   * after our audio stopped, which is comfortably outside a 400 ms tail. An
+   * echo of the same line, by contrast, is *concurrent* with the playback that
+   * produced it, so it commits while the tail is still open.
+   */
+  line.audible = false;
+  line.audibleEndedAt = Date.now() - 1500;
+  line.say("Yes.", 0.62);
+  await line.settle();
+
+  check(
+    "a short yes is never dropped for being short or quiet",
+    captured.dropped.length === 0,
+    JSON.stringify(captured.dropped)
+  );
+  check(
+    "and it confirms the read-back",
+    engine.state.form.get("full_name")?.state === "confirmed",
+    String(engine.state.form.get("full_name")?.state)
+  );
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- comparing against what was played, not what was synthesised");
+{
+  // The reason the marks exist. A three-sentence reply is written to Twilio in
+  // milliseconds and takes seconds to play, so when the first sentence echoes
+  // back while the third is still playing, comparing it against the whole
+  // synthesised line matches a fragment against a paragraph - the similarity
+  // is low, the echo passes, and the agent answers itself.
+  const { halfDuplex } = await import("./half-duplex.js");
+
+  const played = "I have Priya Sharma, the 7th of March, 1989.";
+  const heardBack = "i have priya sharman the 7th of march 1989";
+
+  check(
+    "an echo of what was played is caught",
+    halfDuplex({
+      text: heardBack,
+      playout: { ttsPlaying: true, ttsEndedAt: 0, playedText: played },
+      tailMs: 400,
+      speechMs: 2000,
+      words: 9,
+    }).verdict === "echo"
+  );
+
+  /**
+   * The case the truncation is for, and the direction the risk actually runs.
+   *
+   * Approximate substring matching would catch the echo against the whole
+   * synthesised line too - the played text is a prefix of it - so comparing
+   * against the wrong string does not let echo through. It does the opposite,
+   * and worse: it drops the customer. Audio that was written to Twilio and
+   * then thrown away by a `clear` was never in anyone's room, so a customer
+   * who happens to say something resembling it is a customer, not an echo. A
+   * gate that compared against what was synthesised would silently discard
+   * them, and silently is the only way this gate ever fails.
+   */
+  const cutOffBeforeItPlayed = "just a yes or no is fine";
+  check(
+    "speech resembling audio that was cleared before it played is not echo",
+    halfDuplex({
+      text: cutOffBeforeItPlayed,
+      // The customer barged in, so only the first sentence was ever heard.
+      playout: { ttsPlaying: true, ttsEndedAt: 0, playedText: played },
+      tailMs: 400,
+      speechMs: 1200,
+      words: 6,
+    }).verdict === "barge_in"
+  );
+
+  const quiet = halfDuplex({
+    text: "yes",
+    playout: { ttsPlaying: false, ttsEndedAt: Date.now() - 5000, playedText: played },
+    tailMs: 400,
+    speechMs: 300,
+    words: 1,
+  });
+  check("nothing is gated once the agent has been quiet a while", quiet.verdict === "clear", JSON.stringify(quiet));
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- how long the tail has to be, in arithmetic rather than opinion");
+{
+  /**
+   * The gate runs when a transcript commits, and Scribe does not commit until
+   * `STT_SILENCE_MS` of quiet. So the tail is not measured against when the
+   * echo was *spoken* - it is measured against when news of it arrives, which
+   * is a whole VAD window later.
+   *
+   * That matters most for the echo of the *last* sentence of a line, because
+   * that sentence is the question, and an echo of the question is the one most
+   * likely to be misread as an answer to it. Its speech ends as our playback
+   * ends, so it commits roughly `STT_SILENCE_MS` afterwards - outside a 400 ms
+   * tail, and inside a tail set above the silence window.
+   *
+   * Written as a check rather than a comment so that changing either number
+   * without the other is a failure rather than a surprise on a live call.
+   */
+  const { halfDuplex } = await import("./half-duplex.js");
+  const { env: liveEnv } = await import("../env.js");
+
+  const lastSentenceEcho = (tailMs: number) =>
+    halfDuplex({
+      text: "is that right",
+      playout: {
+        ttsPlaying: false,
+        // Playback ended, then the echo's own silence had to run out before
+        // Scribe would commit it.
+        ttsEndedAt: Date.now() - (liveEnv.sttSilenceMs + 150),
+        playedText: "I have Priya Sharma, 7th of March, 1989. Is that right?",
+      },
+      tailMs,
+      speechMs: 900,
+      words: 3,
+    }).verdict;
+
+  check(
+    "an echo of the closing question outlives a tail shorter than the silence window",
+    lastSentenceEcho(400) === "clear",
+    `tail 400 vs STT_SILENCE_MS ${liveEnv.sttSilenceMs} -> ${lastSentenceEcho(400)}`
+  );
+  check(
+    "and is caught by a tail set above it",
+    lastSentenceEcho(liveEnv.sttSilenceMs + 500) === "echo",
+    `tail ${liveEnv.sttSilenceMs + 500} -> ${lastSentenceEcho(liveEnv.sttSilenceMs + 500)}`
+  );
 }
 
 console.log(failures ? `\n${failures} failure(s).` : "\nAll dialogue checks pass.");

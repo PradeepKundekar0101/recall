@@ -36,23 +36,58 @@ function check(label: string, ok: boolean, detail = ""): void {
   console.log(`${ok ? "ok  " : "FAIL"} ${label}${detail ? `\n      ${detail}` : ""}`);
 }
 
+/**
+ * A media stream that plays audio at the speed audio plays.
+ *
+ * This used to acknowledge every mark after one fixed delay, which is the one
+ * thing Twilio does not do - and the whole echo defence now rests on what a
+ * returning mark means. Twilio holds a mark until the audio queued in front of
+ * it has played out, so a mark is a statement about the customer's ears rather
+ * than about the socket. A fake that acknowledges on a timer would let a bug
+ * that reports a three-sentence reply as fully heard the instant it is written
+ * pass every check in this file.
+ *
+ * So the playhead is modelled: 20 ms per frame written, marks acknowledged when
+ * the playhead reaches them, and a `clear` throws away everything still queued
+ * without acknowledging it - which is exactly what makes `playedText` truncate.
+ */
 class FakeMediaStream extends EventEmitter {
   readonly sent: string[] = [];
   readyState = 1;
-  /** How long "the audio in front of the mark" takes to play out. */
-  constructor(private markDelayMs = 0) {
-    super();
-  }
+  /** When the audio written so far will have finished playing. */
+  private playheadAt = 0;
+  private pending = new Set<NodeJS.Timeout>();
+
   send(data: string): void {
     this.sent.push(String(data));
-    // Twilio acks a mark once the audio in front of it has played out. Without
-    // that ack here, every speak() in this file would sit on its ceiling timer.
     const msg = JSON.parse(String(data)) as { event: string; mark?: { name: string } };
+    const now = Date.now();
+
+    if (msg.event === "media") {
+      // One 20 ms frame, queued behind whatever is already playing.
+      this.playheadAt = Math.max(this.playheadAt, now) + 20;
+      return;
+    }
+
+    if (msg.event === "clear") {
+      // Twilio drops the buffer. Nothing still queued is ever acknowledged,
+      // because none of it was heard.
+      for (const timer of this.pending) clearTimeout(timer);
+      this.pending.clear();
+      this.playheadAt = 0;
+      return;
+    }
+
     if (msg.event === "mark" && msg.mark) {
       const { name } = msg.mark;
-      const ack = () => this.emit("message", JSON.stringify({ event: "mark", mark: { name } }));
-      if (this.markDelayMs) setTimeout(ack, this.markDelayMs);
-      else setImmediate(ack);
+      const timer = setTimeout(
+        () => {
+          this.pending.delete(timer);
+          this.emit("message", JSON.stringify({ event: "mark", mark: { name } }));
+        },
+        Math.max(0, this.playheadAt - now)
+      );
+      this.pending.add(timer);
     }
   }
 
@@ -125,12 +160,12 @@ const journey = loadJourney();
 const lead = loadLeads()[0]!;
 
 /** Dials, attaches a fake media stream, and waits for the transport to be live. */
-async function connect(callId: string, openStt?: SttOpener, markDelayMs = 0) {
+async function connect(callId: string, openStt?: SttOpener) {
   const twilio = fakeTwilio();
   const transport = new TwilioTransport({ journey, lead, callId, client: twilio.client, openStt });
   const started = transport.start();
   await sleep(20);
-  const stream = new FakeMediaStream(markDelayMs);
+  const stream = new FakeMediaStream();
   const attached = attachMediaStream(callId, stream as unknown as WebSocket);
   await sleep(20);
   stream.emit("message", JSON.stringify({ event: "start", streamSid: "MZ_fake" }));
@@ -275,7 +310,7 @@ console.log("\n-- talking over the agent");
   // Two words are a customer agreeing, not taking the turn. Cutting a read-back
   // off on "yeah okay" is a large part of what made real calls sound broken.
   const stt = fakeStt();
-  const { transport, stream } = await connect("check-backchannel", stt.open, 150);
+  const { transport, stream } = await connect("check-backchannel", stt.open);
   const heard: { text: string; startedAt: number | null }[] = [];
   transport.onUtterance((text, _confidence, meta) => heard.push({ text, startedAt: meta?.startedAt ?? null }));
 
@@ -295,7 +330,7 @@ console.log("\n-- talking over the agent");
 
 {
   const stt = fakeStt();
-  const { transport, stream } = await connect("check-turn-taker", stt.open, 150);
+  const { transport, stream } = await connect("check-turn-taker", stt.open);
   const playing = transport.speak("I have Priya Sharma. Is that right?");
   await sleep(20);
   stt.start();
@@ -308,7 +343,7 @@ console.log("\n-- talking over the agent");
 
 {
   const stt = fakeStt();
-  const { transport, stream } = await connect("check-sustained", stt.open, 2000);
+  const { transport, stream } = await connect("check-sustained", stt.open);
   const playing = transport.speak("First sentence here. Second sentence follows it.");
   // Mock audio is 0.4 s a sentence: the first has played out, the second is playing.
   await sleep(450);
@@ -345,7 +380,7 @@ console.log("\n-- two lines handed over at once");
   // first line's mark then cleared `speaking` while the second was still
   // playing - which switched barge-in off for the rest of it.
   const stt = fakeStt();
-  const { transport, stream } = await connect("check-two-lines", stt.open, 100);
+  const { transport, stream } = await connect("check-two-lines", stt.open);
   const first = transport.speak("First line.");
   const second = transport.speak("Second line.");
   await sleep(20);
@@ -358,11 +393,14 @@ console.log("\n-- two lines handed over at once");
 
 {
   const stt = fakeStt();
-  const { transport, stream } = await connect("check-two-lines-barge", stt.open, 100);
+  const { transport, stream } = await connect("check-two-lines-barge", stt.open);
   void transport.speak("First line.");
   const second = transport.speak("Second line.");
   // Long enough that the first line has played out and the second is playing.
-  await sleep(150);
+  // Mock audio is 0.4 s a line and the fake stream now plays it in 0.4 s, so
+  // the first line's mark does not come back - and the second does not start -
+  // until 400 ms in.
+  await sleep(450);
   stt.start();
   stt.partial("hang on stop there");
   const b = await second;
@@ -371,6 +409,156 @@ console.log("\n-- two lines handed over at once");
     stream.cleared && b.completed === false,
     `cleared=${stream.cleared} ${JSON.stringify(b)}`
   );
+}
+
+console.log("\n-- what the customer has actually heard");
+{
+  // The premise of the whole echo defence. Frames go into Twilio's buffer far
+  // faster than they play, so a transport that reports "spoken" when it has
+  // finished writing is describing its own socket, not the customer's ears -
+  // and every gate built on "is our voice in the room" would then be reading a
+  // number that is seconds early.
+  const stt = fakeStt();
+  const { transport, stream } = await connect("check-playout", stt.open);
+
+  check("nothing has played before a line starts", transport.playout().playedText === "", transport.playout().playedText);
+
+  const line = "First sentence here. Second sentence follows it.";
+  const playing = transport.speak(line);
+
+  await sleep(30);
+  const early = transport.playout();
+  check(
+    "both sentences are written long before either is heard",
+    stream.mediaFrames === 40 && early.playedText === "" && early.ttsPlaying,
+    `${stream.mediaFrames} frames written, played "${early.playedText}"`
+  );
+
+  await sleep(420);
+  const midway = transport.playout();
+  check(
+    "the first sentence counts as heard when its mark comes back",
+    midway.playedText === "First sentence here." && midway.ttsPlaying,
+    `played "${midway.playedText}" ttsPlaying=${midway.ttsPlaying}`
+  );
+
+  const result = await playing;
+  const after = transport.playout();
+  check(
+    "the whole line counts as heard once the last mark lands",
+    result.completed && after.playedText === line,
+    `${JSON.stringify(result)} played "${after.playedText}"`
+  );
+  check(
+    "playback is reported as over, and when",
+    !after.ttsPlaying && after.ttsEndedAt > 0 && Date.now() - after.ttsEndedAt < 200,
+    `ttsPlaying=${after.ttsPlaying} endedAt=${after.ttsEndedAt}`
+  );
+}
+
+{
+  // Barge-in truncates what was heard to the last acknowledged mark. The
+  // sentences still sitting in Twilio's buffer are thrown away by the `clear`,
+  // so they were never in the customer's room and must not be compared against
+  // the next thing the microphone picks up.
+  const stt = fakeStt();
+  const { transport, stream } = await connect("check-playout-truncate", stt.open);
+  const playing = transport.speak("First sentence here. Second sentence follows it.");
+
+  await sleep(430);
+  stt.start();
+  stt.partial("hang on my dog is barking");
+
+  const result = await playing;
+  check(
+    "a cut line reports only the sentence whose mark came back",
+    result.completed === false && result.heard === "First sentence here.",
+    JSON.stringify(result)
+  );
+  check(
+    "played text is truncated to the last acknowledged mark",
+    transport.playout().playedText === "First sentence here." && stream.cleared,
+    `played "${transport.playout().playedText}" cleared=${stream.cleared}`
+  );
+  check(
+    "playback is reported as over the instant it is cleared",
+    !transport.playout().ttsPlaying,
+    `ttsPlaying=${transport.playout().ttsPlaying}`
+  );
+}
+
+{
+  // The engine's own half-duplex gate reaches the wire through this, when it
+  // decides a transcript is a barge-in that the transport let past.
+  const stt = fakeStt();
+  const { transport, stream } = await connect("check-stop-playback", stt.open);
+  const playing = transport.speak("First sentence here. Second sentence follows it.");
+  await sleep(430);
+  transport.stopPlayback();
+  const result = await playing;
+  check(
+    "stopPlayback cuts the line the way barge-in does",
+    stream.cleared && result.completed === false && result.heard === "First sentence here.",
+    JSON.stringify(result)
+  );
+}
+
+console.log("\n-- the local monitor");
+{
+  // Every frame written to Twilio is published for the console, tagged with
+  // the call it belongs to. Agent audio only: the inbound track never passes
+  // through sendFrames, which is the single place this is tapped.
+  const { publishAgentAudio, attachMonitor, parseFrame, monitorListenerCount } = await import("../monitor.js");
+  void publishAgentAudio;
+
+  const received: { callId: string; bytes: number }[] = [];
+  let hello: string | null = null;
+  const socket = Object.assign(new EventEmitter(), {
+    readyState: 1,
+    send: (data: unknown) => {
+      if (typeof data === "string") {
+        hello = data;
+        return;
+      }
+      const frame = parseFrame(data as Buffer);
+      if (frame) received.push({ callId: frame.callId, bytes: frame.ulaw.length });
+    },
+  });
+
+  attachMonitor(socket as unknown as WebSocket, "check-monitor");
+  check("the monitor says hello before any audio", String(hello).includes("monitor.hello"), String(hello));
+
+  const stt = fakeStt();
+  const { transport } = await connect("check-monitor", stt.open);
+  await transport.speak("Hello there.");
+
+  check("the agent's audio reaches the monitor", received.length > 0, `${received.length} frame(s)`);
+  check(
+    "every frame is tagged with the call it came from",
+    received.every((f) => f.callId === "check-monitor"),
+    JSON.stringify(received.slice(0, 2))
+  );
+  check(
+    "the monitor carries the same 8 kHz ulaw that went to Twilio",
+    received.reduce((sum, f) => sum + f.bytes, 0) === 3200,
+    `${received.reduce((sum, f) => sum + f.bytes, 0)} bytes for 0.4s of mock audio`
+  );
+
+  // A monitor for a different call hears nothing from this one.
+  const other: unknown[] = [];
+  const otherSocket = Object.assign(new EventEmitter(), {
+    readyState: 1,
+    send: (data: unknown) => {
+      if (typeof data !== "string") other.push(data);
+    },
+  });
+  attachMonitor(otherSocket as unknown as WebSocket, "some-other-call");
+  await transport.speak("And again.");
+  check("a monitor bound to another call hears nothing", other.length === 0, `${other.length} frame(s)`);
+
+  socket.emit("close");
+  otherSocket.emit("close");
+  check("closing a monitor detaches it", monitorListenerCount() === 0, `${monitorListenerCount()} still listening`);
 }
 
 console.log(failures ? `\n${failures} failure(s).` : "\nAll transport checks pass.");

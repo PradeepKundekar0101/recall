@@ -23,7 +23,14 @@ import type { SttOptions, SttSession } from "./types.js";
 
 const URL_BASE = "wss://api.elevenlabs.io/v1/speech-to-text/realtime";
 
-type ScribeWord = { text: string; type?: string; logprob?: number };
+/**
+ * One word as Scribe commits it.
+ *
+ * `start` and `end` are seconds, per the realtime API reference, and are only
+ * present with `include_timestamps`. `logprob` is the per-word confidence the
+ * LOW CONF signal and the answer gate are both defined on.
+ */
+type ScribeWord = { text: string; type?: string; logprob?: number; start?: number; end?: number };
 
 type ScribeMessage = {
   message_type: string;
@@ -37,20 +44,44 @@ type ScribeMessage = {
 };
 
 export function scribeQuery(opts: SttOptions): URLSearchParams {
+  const silenceMs = opts.silenceMs ?? env.sttSilenceMs;
   const params = new URLSearchParams({
     model_id: env.sttModel,
     // Twilio's native format, passed through untouched.
     audio_format: "ulaw_8000",
     language_code: "en",
-    // Server-side VAD closes the turn; the engine never has to guess at silence.
-    commit_strategy: "vad",
+    /**
+     * Server-side VAD closes the turn, unless we have taken that job over.
+     *
+     * `manual` stops Scribe deciding when speech ended and leaves the commit to
+     * our own silence timer - which, unlike the server's, knows whether the
+     * agent is currently talking. The two are not equivalent in latency: the
+     * server commits the moment its VAD closes, ours commits `silenceMs` after
+     * the last partial, so this is a deliberate trade and off by default.
+     */
+    commit_strategy: opts.manualCommit ?? env.sttManualCommit ? "manual" : "vad",
     // The server clamps this to 0.5s minimum - asking for 0.3 silently became 0.5,
     // so it is set to the real floor rather than a number that looks faster.
-    vad_silence_threshold_secs: String(Math.max(0.5, (opts.silenceMs ?? 500) / 1000)),
+    vad_silence_threshold_secs: String(Math.max(0.5, silenceMs / 1000)),
     min_speech_duration_ms: "120",
-    // Required for per-word logprobs, which the LOW CONF signal is defined on.
+    // Required for per-word logprobs and timestamps. The first is what LOW CONF
+    // and the answer gate are built on; the second is how the half-duplex gate
+    // measures speech duration without trusting wall clock between events.
     include_timestamps: "true",
   });
+
+  /**
+   * Only sent when the operator set it.
+   *
+   * A parameter Scribe does not like fails the whole socket with
+   * `invalid_request`, and the call then runs with the agent talking and
+   * hearing nothing - which has happened once already, over a keyterm. An
+   * unset threshold leaves the server's own default in place.
+   */
+  const vadThreshold = opts.vadThreshold ?? env.sttVadThreshold;
+  if (vadThreshold !== null && vadThreshold !== undefined && Number.isFinite(vadThreshold)) {
+    params.append("vad_threshold", String(vadThreshold));
+  }
 
   /**
    * Entity detection takes entity types or categories, not a boolean. `pci` is the
@@ -89,7 +120,7 @@ export function scribeQuery(opts: SttOptions): URLSearchParams {
  */
 export const CLEAN_BASELINE = 0.52;
 
-type ScribeWordLike = { text?: string; type?: string; logprob?: number };
+type ScribeWordLike = { text?: string; type?: string; logprob?: number; start?: number; end?: number };
 
 /**
  * exp() converts one log probability back to a probability; the mean over real
@@ -102,6 +133,35 @@ export function meanConfidence(words: ScribeWordLike[] | undefined): number | nu
   if (!real.length) return null;
   const raw = real.reduce((acc, w) => acc + Math.exp(w.logprob as number), 0) / real.length;
   return Math.min(1, raw / CLEAN_BASELINE);
+}
+
+/**
+ * How long the speech itself lasted, from the provider's own word timestamps.
+ *
+ * Wall clock between the first partial and the commit measures the vendor's
+ * latency as much as the customer's speech, and the half-duplex gate needs the
+ * second without the first: half a second of speech is a person taking the
+ * turn, half a second of network is nothing at all.
+ *
+ * `start` and `end` are documented as seconds. A committed turn that carries no
+ * timestamps returns null rather than zero, so the caller can skip the clause
+ * instead of treating "not measured" as "too short" and dropping every answer.
+ */
+export function speechDurationMs(words: ScribeWordLike[] | undefined): number | null {
+  const timed = (words ?? []).filter(
+    (w) => w.type !== "spacing" && typeof w.start === "number" && typeof w.end === "number"
+  );
+  if (!timed.length) return null;
+  const start = Math.min(...timed.map((w) => w.start as number));
+  const end = Math.max(...timed.map((w) => w.end as number));
+  if (!(end > start)) return 0;
+  return Math.round((end - start) * 1000);
+}
+
+/** Real words, excluding the spacing tokens, which are not words anybody said. */
+export function realWordCount(words: ScribeWordLike[] | undefined): number | null {
+  if (!words) return null;
+  return words.filter((w) => w.type !== "spacing" && (w.text ?? "").trim().length > 0).length;
 }
 
 /** The unscaled mean, for the calibration tool. */
@@ -128,6 +188,35 @@ export async function openScribe(opts: SttOptions): Promise<SttSession> {
   let turnOpen = false;
 
   let messagesSeen = 0;
+  /** The raw word shape is printed once per session, for the gates below. */
+  let wordsLogged = false;
+
+  const manualCommit = opts.manualCommit ?? env.sttManualCommit;
+  const silenceMs = opts.silenceMs ?? env.sttSilenceMs;
+  let commitTimer: NodeJS.Timeout | null = null;
+
+  function clearManualCommit(): void {
+    if (commitTimer) clearTimeout(commitTimer);
+    commitTimer = null;
+  }
+
+  /**
+   * Close the turn ourselves, `silenceMs` after the last partial.
+   *
+   * Only armed under `commit_strategy=manual`. Under VAD the server owns this
+   * and a second timer racing it would commit the same speech twice.
+   */
+  function armManualCommit(): void {
+    if (!manualCommit) return;
+    clearManualCommit();
+    commitTimer = setTimeout(() => {
+      commitTimer = null;
+      if (closed) return;
+      log.info(`[${label}] committing on our own silence timer (${silenceMs}ms)`);
+      send("", true);
+    }, silenceMs);
+    commitTimer.unref?.();
+  }
 
   /**
    * Every handler is attached before the open handshake is awaited.
@@ -185,6 +274,10 @@ export async function openScribe(opts: SttOptions): Promise<SttSession> {
           events.onSpeechStart?.();
         }
         events.onPartial?.(text);
+        // Our own silence timer, when Scribe's VAD has been turned off. Every
+        // partial pushes the commit out, so a customer still talking is never
+        // cut mid-sentence by a clock.
+        armManualCommit();
         break;
       }
 
@@ -194,8 +287,29 @@ export async function openScribe(opts: SttOptions): Promise<SttSession> {
       case "committed_transcript_with_timestamps": {
         const text = msg.text ?? "";
         turnOpen = false;
+        clearManualCommit();
         events.onSpeechEnd?.();
-        if (text.trim()) events.onFinal?.(text, meanConfidence(msg.words));
+
+        /**
+         * The raw word objects, once per session.
+         *
+         * The gates below are defined on per-word `logprob` and on `start` /
+         * `end` timestamps, and the only way to know those fields are really
+         * there - and really vary - is to look at what a live call returns.
+         * One line, the first committed turn, and never again: this is a
+         * transcript and it does not belong in a log on every turn.
+         */
+        if (!wordsLogged) {
+          wordsLogged = true;
+          log.info(`[${label}] first committed words: ${JSON.stringify((msg.words ?? []).slice(0, 8))}`);
+        }
+
+        if (text.trim()) {
+          events.onFinal?.(text, meanConfidence(msg.words), {
+            speechMs: speechDurationMs(msg.words),
+            words: realWordCount(msg.words),
+          });
+        }
         break;
       }
 
@@ -266,6 +380,7 @@ export async function openScribe(opts: SttOptions): Promise<SttSession> {
     },
     close() {
       closed = true;
+      clearManualCommit();
       try {
         socket.close();
       } catch {

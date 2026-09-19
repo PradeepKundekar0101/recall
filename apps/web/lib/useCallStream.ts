@@ -48,6 +48,14 @@ export type CallState = {
   handoff: { reason: EscalationSignal; packet: HandoffPacket } | null;
   guardrails: { guardrail: string; detail: string; at: number }[];
   /**
+   * Transcripts the engine refused, newest last.
+   *
+   * Rendered inline in the transcript rather than tucked away: a drop is silent
+   * on the line, so without this the board shows nothing at all happening while
+   * the agent is busy refusing the customer's own speakerphone.
+   */
+  dropped: { text: string; reason: string; confidence: number | null; at: number }[];
+  /**
    * Every request made to the receiving system, oldest first: one per confirmed
    * field, then the final POST. This is what the API logs pane renders.
    */
@@ -105,6 +113,7 @@ const EMPTY: CallState = {
   signals: {},
   handoff: null,
   guardrails: [],
+  dropped: [],
   submissions: [],
   metrics: null,
   latencies: [],
@@ -242,6 +251,19 @@ function reduce(prev: CallState, event: CallEvent): CallState {
 
     case "escalation.handoff":
       return { ...prev, handoff: { reason: event.reason, packet: event.packet }, status: "handoff" };
+
+    case "transcript.dropped":
+      return {
+        ...prev,
+        // The interim line is cleared too: it was the grey streaming text of
+        // the very utterance being dropped, and leaving it up would show the
+        // room a customer turn that the engine has just decided never happened.
+        interim: null,
+        dropped: [
+          ...prev.dropped,
+          { text: event.text, reason: event.reason, confidence: event.confidence, at: event.ts },
+        ],
+      };
 
     case "guardrail.trigger":
       return {
