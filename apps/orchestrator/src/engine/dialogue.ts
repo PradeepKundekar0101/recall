@@ -442,7 +442,22 @@ export class DialogueEngine {
     // regardless; this switch only sees the model's guess.
     const answeredSomething = extraction.accepted.length > 0;
 
-    switch (answeredSomething ? "answer" : extraction.intent) {
+    // A yes or no to a read-back, to the consent question or at the review gate
+    // is not nothing, even though it carries no value. It is answered in code
+    // further down, and the model's guess must not get to it first: asked "is
+    // this number the best one to reach you on?" a customer said "Yes, that's
+    // the one." - one character past the length that decides a yes without the
+    // model - and the extractor came back with intent=question. The engine
+    // deflected it as an advice question and handed off a customer who had just
+    // agreed. The same guess landing on "no" would have ended the call.
+    const answersTheLine =
+      !predates &&
+      (this.state.awaitingConfirm.length > 0 ||
+        this.state.phase === "consent" ||
+        this.state.phase === "review") &&
+      normaliseBool(text) !== null;
+
+    switch (answeredSomething || answersTheLine ? "answer" : extraction.intent) {
       // decline and busy are deliberately absent.
       //
       // Both end the call, and decline also adds a permanent opt-out, so they

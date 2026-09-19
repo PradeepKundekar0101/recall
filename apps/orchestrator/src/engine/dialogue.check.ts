@@ -278,6 +278,36 @@ console.log("\n-- a field the lead already carries is confirmed, not asked");
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n-- a yes to a read-back outranks the model's guess at intent");
+{
+  // Found running the journey end to end against L-1043. Asked "is this number
+  // the best one to reach you on?" the customer said "Yes, that's the one." -
+  // one character past the length that decides a yes in code, so it went to the
+  // extractor, which returned no patch and intent=question. The engine read
+  // that as an advice question, deflected it and handed the call off: the
+  // customer had just said yes and got a colleague instead.
+  //
+  // The model's intent is already only trusted when the turn produced nothing.
+  // A yes or no to the line on the wire is not nothing.
+  const { line, engine, captured } = scenario("yes-outranks-intent", IDENTITY_AND_CONTACT, {
+    extract: async () => ({ accepted: [], rejected: [], intent: "question" as const, ms: 0 }),
+  });
+  await engine.begin();
+  line.say("Yes, now's fine.");
+  await line.settle();
+
+  check("the walk reaches the name read-back", /Priya Sharma/.test(line.last()), line.last());
+  line.say("Yes, that's the one.");
+  await line.settle();
+
+  check("the yes confirms the field", engine.state.form.get("full_name")?.state === "confirmed", JSON.stringify(engine.state.form.get("full_name")));
+  check("no handoff on a customer who said yes", captured.handoff === null, String(captured.handoff));
+  check("the journey moves on", /date of birth/i.test(line.last()), line.last());
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
 console.log("\n-- a number the form does not hold is asked for, not confirmed at nothing");
 {
   // Call bd82d644, 19 Sep 2026 05:58 UTC. Lead L-1043 carried no phone, so the
