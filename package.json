@@ -16,8 +16,12 @@
     "sandbox:mock": "pnpm --filter orchestrator sandbox:mock",
     "voice:check": "pnpm --filter orchestrator voice:check",
     "voice:calibrate": "pnpm --filter orchestrator voice:calibrate",
+    "voice:replay": "pnpm --filter orchestrator voice:replay",
     "llm:check": "pnpm --filter orchestrator llm:check",
-    "normalise:check": "pnpm --filter orchestrator normalise:check"
+    "normalise:check": "pnpm --filter orchestrator normalise:check",
+    "dialogue:check": "pnpm --filter orchestrator dialogue:check",
+    "tts:check": "pnpm --filter orchestrator tts:check",
+    "transport:check": "pnpm --filter orchestrator transport:check"
   },
   "engines": {
     "node": ">=20 <21"
