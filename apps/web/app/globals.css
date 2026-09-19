@@ -321,7 +321,9 @@ html, body {
 
 .lane {
   position: relative;
-  height: 5px;
+  /* The escalation lanes are the signature panel, and at 5px they carried less
+     weight on screen than the rules drawn between sections. */
+  height: 8px;
   background: #1f2a40;
   border: 1px solid var(--rule);
   border-radius: 3px;
@@ -363,6 +365,10 @@ html, body {
   color: var(--alarm);
   background: rgba(255, 92, 92, 0.08);
 }
+.handoff-banner .label { color: inherit; }
+.banner-evidence { margin-top: 4px; }
+.script-pos-head { margin-top: 20px; }
+.script-pos { color: var(--ink-dim); }
 
 /* ---------- payload drawer ---------- */
 
