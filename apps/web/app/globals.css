@@ -282,8 +282,12 @@ html, body {
 .field:focus-visible { outline: 2px solid var(--st-prefilled); outline-offset: 1px; }
 
 .field-label { font-family: var(--font-cond), sans-serif; text-transform: uppercase; letter-spacing: 0.06em; font-size: 10px; color: var(--ink-faint); }
-.field-value { font-size: 13px; color: var(--ink); word-break: break-word; text-align: right; }
-.field-value:empty::before { content: "—"; color: var(--st-empty); }
+/* The value sits immediately after its label instead of against the far edge of
+   the row. Right-aligned, a name rendered 362px from the label it belongs to,
+   which is a long association to carry across a projected panel. The fixed
+   label column still gives every value a common left edge to scan down. */
+.field-value { font-size: 13px; color: var(--ink); word-break: break-word; text-align: left; padding-right: 10px; }
+.field-value:empty::before { content: "-"; color: var(--st-empty); }
 /* The confidence figure is called out loud during the demo, so it has to be
    legible off a projector rather than tucked away as metadata. */
 .field-conf { font-size: 11px; color: var(--ink-dim); font-variant-numeric: tabular-nums; min-width: 4ch; text-align: right; }
