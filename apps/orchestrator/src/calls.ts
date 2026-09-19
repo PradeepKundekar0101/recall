@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CallOutcome, Journey, Lead } from "@recall/shared";
+import { LATENCY_BUDGET_MS, type CallOutcome, type Journey, type Lead } from "@recall/shared";
 import { env } from "./env.js";
 import { log } from "./log.js";
 import { bus } from "./events.js";
@@ -44,6 +44,8 @@ export async function startCall(opts: {
   lead: Lead;
   journey: Journey;
   personaId?: string;
+  /** The operator's brief for how the agent should talk. Null when none was written. */
+  agentBrief?: string | null;
 }): Promise<LiveCall> {
   const callId = randomUUID();
   const { lead, journey } = opts;
@@ -68,7 +70,13 @@ export async function startCall(opts: {
   // The calls row is written before any event references it. call_events has a
   // foreign key onto it, so emitting first meant every event on a new call failed
   // its insert - the audit trail was losing the opening of every single call.
-  await openCall({ callId, lead, journeyId: journey.id, testRun: true });
+  await openCall({
+    callId,
+    lead,
+    journeyId: journey.id,
+    testRun: true,
+    simulated: env.transport !== "pstn" || env.mockVoice,
+  });
 
   bus.emitEvent(callId, {
     type: "call.hello",
@@ -76,6 +84,8 @@ export async function startCall(opts: {
     journey_id: journey.id,
     test_run: true,
     dial_target: lead.phone,
+    simulated: env.transport !== "pstn" || env.mockVoice,
+    ...(opts.agentBrief ? { agent_brief: opts.agentBrief } : {}),
   });
   bus.emitEvent(callId, { type: "call.status", status: "dialling" });
 
@@ -129,7 +139,7 @@ export async function startCall(opts: {
               type: "latency.turn",
               ms,
               utterance: text.slice(0, 80),
-              over_budget: ms > 1000,
+              over_budget: ms > LATENCY_BUDGET_MS,
             }),
         })
       : new DialogueEngine(callId, journey, lead, transport, {
@@ -150,6 +160,18 @@ export async function startCall(opts: {
             });
           },
           onSection: (section, field) => bus.emitEvent(callId, { type: "script.section", section, field }),
+          onTurnTiming: (timing) => {
+            bus.emitEvent(callId, { type: "turn.timing", ...timing });
+            // The journey engine has never emitted this. `first_audio_ms` is
+            // exactly the number the rehearsal checklist asserts a median on,
+            // and until now it was measured on echo calls only.
+            bus.emitEvent(callId, {
+              type: "latency.turn",
+              ms: timing.first_audio_ms,
+              utterance: "",
+              over_budget: timing.first_audio_ms > LATENCY_BUDGET_MS,
+            });
+          },
           onSignals: (readings) => {
             for (const r of readings) {
               bus.emitEvent(callId, {
@@ -189,11 +211,11 @@ export async function startCall(opts: {
               detail,
             }),
           onOutcome: (outcome) => void finish(outcome),
-          onSubmit: (step, status, body) => bus.emitEvent(callId, { type: "submit.result", step, status, body }),
+          onSubmit: (result) => bus.emitEvent(callId, { type: "submit.result", ...result }),
           persistField: () => {
             /* the bus subscriber in index.ts mirrors every event into call_events */
           },
-        });
+        }, undefined, { brief: opts.agentBrief ?? null });
 
   const call: LiveCall = { callId, lead, mode, transport, engine, startedAt, finish };
   live.set(callId, call);

@@ -147,6 +147,12 @@ export type SpeakOptions = {
   cacheable?: boolean;
   /** Abort mid-synthesis. Barge-in passes the turn's signal here. */
   signal?: AbortSignal;
+  /**
+   * Fires once, as soon as it is known whether this line came off disk or cost
+   * a round trip. Reported rather than returned so the return type stays a
+   * Buffer for the callers that only want audio.
+   */
+  onMeta?: (meta: { cached: boolean; chars: number }) => void;
 };
 
 /**
@@ -163,9 +169,13 @@ export async function synthesize(opts: SpeakOptions): Promise<Buffer> {
 
   if (opts.cacheable) {
     const hit = memory.get(text);
-    if (hit) return hit;
+    if (hit) {
+      opts.onMeta?.({ cached: true, chars: text.length });
+      return hit;
+    }
     const path = cachePath(text);
     if (existsSync(path)) {
+      opts.onMeta?.({ cached: true, chars: text.length });
       const audio = readFileSync(path);
       memory.set(text, audio);
       return audio;
@@ -174,6 +184,8 @@ export async function synthesize(opts: SpeakOptions): Promise<Buffer> {
 
   if (env.mockVoice) return mockAudio();
   if (!has.tts()) throw new Error("ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID are not set - cannot synthesize");
+
+  opts.onMeta?.({ cached: false, chars: text.length });
 
   const chunks: Buffer[] = [];
   const stream = await openTtsStream({ signal: opts.signal, onAudio: (buf) => chunks.push(buf) });

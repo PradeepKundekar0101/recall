@@ -5,7 +5,14 @@ import { log } from "../log.js";
 import { openStt, type SttSession } from "../voice/stt.js";
 import type { SttOpener } from "../voice/stt/types.js";
 import { synthesize } from "../voice/tts.js";
-import type { SpeakResult, Transport, TransportDeps, TransportEndReason, UtteranceMeta } from "../engine/transport.js";
+import type {
+  AudioMeta,
+  SpeakResult,
+  Transport,
+  TransportDeps,
+  TransportEndReason,
+  UtteranceMeta,
+} from "../engine/transport.js";
 
 /**
  * Twilio Media Streams <-> Deepgram / ElevenLabs, mulaw 8k end to end.
@@ -275,12 +282,15 @@ export class TwilioTransport implements Transport {
           break;
         }
         case "stop":
-          this.end("hangup");
+          this.end(this.transferred ? "transferred" : "hangup");
           break;
       }
     });
 
-    ws.on("close", () => this.end("hangup"));
+    // A stream that ends after a transfer is Twilio taking the wire back, not
+    // the customer hanging up. Reading it as a hangup finalised the call as
+    // `disconnected` and completed the leg that was ringing the human.
+    ws.on("close", () => this.end(this.transferred ? "transferred" : "hangup"));
     ws.on("error", (err) => {
       log.call(this.id, `media socket error: ${err.message}`);
       this.end("failed");
@@ -345,7 +355,10 @@ export class TwilioTransport implements Transport {
     this.endedCb = cb;
   }
 
-  async speak(text: string, opts: { onFirstAudio?: () => void; interruptible?: boolean } = {}): Promise<SpeakResult> {
+  async speak(
+    text: string,
+    opts: { onFirstAudio?: () => void; onAudioMeta?: (meta: AudioMeta) => void; interruptible?: boolean } = {}
+  ): Promise<SpeakResult> {
     return this.onTheWire(() => this.playLine(text, opts));
   }
 
@@ -361,7 +374,7 @@ export class TwilioTransport implements Transport {
 
   private async playLine(
     text: string,
-    opts: { onFirstAudio?: () => void; interruptible?: boolean }
+    opts: { onFirstAudio?: () => void; onAudioMeta?: (meta: AudioMeta) => void; interruptible?: boolean }
   ): Promise<SpeakResult> {
     const nothing: SpeakResult = { completed: false, heard: "" };
     if (this.dead) return nothing;
@@ -377,9 +390,20 @@ export class TwilioTransport implements Transport {
     // Sentence-level pipeline: every sentence is synthesised concurrently, and the
     // first one goes on the wire the moment it lands. Time-to-first-audio is one
     // short TTS call, not the whole reply.
+    //
+    // `onAudioMeta` describes one *line*, not one sentence, so each part's meta
+    // is collected here rather than handed straight to the caller - reporting it
+    // per sentence would make a three-sentence reply read as sentence one's
+    // character count and cache state, whichever they happened to be.
     const parts = splitForTts(text);
-    const jobs = parts.map((p) =>
-      synthesize({ text: p }).catch((err) => {
+    const partMetas: (AudioMeta | undefined)[] = new Array(parts.length);
+    const jobs = parts.map((p, i) =>
+      synthesize({
+        text: p,
+        onMeta: (meta) => {
+          partMetas[i] = meta;
+        },
+      }).catch((err) => {
         log.call(this.id, `TTS failed: ${err instanceof Error ? err.message : err}`);
         return Buffer.alloc(0);
       })
@@ -399,6 +423,10 @@ export class TwilioTransport implements Transport {
     // clock since the first frame, it says which sentences had finished playing
     // when the customer cut in.
     const sent: { text: string; ms: number }[] = [];
+    // Only the parts that actually reached the wire count toward the line's
+    // meta - a barge-in stops the loop before the rest are even awaited, and
+    // reporting their cost would describe a reply that was never heard.
+    const usedMetas: AudioMeta[] = [];
     for (let i = 0; i < jobs.length; i++) {
       const audio = await jobs[i];
       if (this.dead || !this.ws || !this.streamSid) break;
@@ -415,6 +443,20 @@ export class TwilioTransport implements Transport {
       frames += this.sendFrames(audio);
       sent.push({ text: parts[i] as string, ms: (audio.length / 8000) * 1000 });
       totalBytes += audio.length;
+      const meta = partMetas[i];
+      if (meta) usedMetas.push(meta);
+    }
+
+    // Fired once for the whole line, synchronously here rather than off a
+    // Promise.allSettled, so it lands before the caller has finished measuring
+    // the turn. A line cut short by barge-in reports only the parts that made
+    // it to the wire by then - that is what the line actually cost, not what
+    // the rest would have cost had it kept playing.
+    if (usedMetas.length) {
+      opts.onAudioMeta?.({
+        cached: usedMetas.every((m) => m.cached),
+        chars: usedMetas.reduce((sum, m) => sum + m.chars, 0),
+      });
     }
 
     if (!totalBytes || this.dead || !this.ws || !this.streamSid || !this.speaking) {
@@ -459,11 +501,19 @@ export class TwilioTransport implements Transport {
    * aborts the signal and the loop stops feeding sentences at someone who has
    * already started talking.
    */
-  async speakStream(sentences: AsyncIterable<string>, signal?: AbortSignal): Promise<string> {
-    return this.onTheWire(() => this.streamLine(sentences, signal));
+  async speakStream(
+    sentences: AsyncIterable<string>,
+    signal?: AbortSignal,
+    onFirstAudio?: () => void
+  ): Promise<string> {
+    return this.onTheWire(() => this.streamLine(sentences, signal, onFirstAudio));
   }
 
-  private async streamLine(sentences: AsyncIterable<string>, signal?: AbortSignal): Promise<string> {
+  private async streamLine(
+    sentences: AsyncIterable<string>,
+    signal?: AbortSignal,
+    onFirstAudio?: () => void
+  ): Promise<string> {
     if (this.dead) return "";
     if (!this.streamSid) await this.streamReady.catch(() => undefined);
     if (this.dead || !this.ws || !this.streamSid) return "";
@@ -486,6 +536,7 @@ export class TwilioTransport implements Transport {
         this.speaking = true;
         started = true;
         this.bargeArmed = false;
+        onFirstAudio?.();
       }
       spoken += `${sentence} `;
       this.lastSpokenTokens = tokenize(spoken);
@@ -552,16 +603,45 @@ export class TwilioTransport implements Transport {
     assertHandoffNumber(toNumber, this.opts.lead.phone);
 
     this.clearPlayback();
-    // The whisper is played to the human only: Twilio fetches the <Number url>
-    // when they answer, and that TwiML never reaches the customer's leg.
-    await this.api()
-      .calls(this.twilioCallSid)
-      .update({
-        twiml: `<Response><Dial answerOnBridge="true"><Number url="${env.publicBaseUrl}/twilio/whisper?text=${encodeURIComponent(whisper)}">${toNumber}</Number></Dial></Response>`,
-      });
+
+    // Marked before the redirect goes out, not after.
+    //
+    // Redirecting the call ends the <Connect><Stream> it is running, and Twilio
+    // tears the media stream down while the update is still in flight. Setting
+    // this afterwards left a window of a few tens of milliseconds in which that
+    // teardown arrived as an ordinary `hangup`: the engine finalised the call as
+    // `disconnected` and finalise() called hangup(), which completed the very
+    // leg that was ringing the human. On call bd82d644 the redirect went out at
+    // 05:58:51 and our own status=completed followed at 05:58:52; the handoff
+    // handset's leg died at no-answer after 0 seconds, and the customer heard
+    // the bridging line and then nothing. The window is not one to make
+    // smaller - the intent to transfer is what matters, so it is recorded
+    // first.
+    this.transferred = true;
+    try {
+      // The whisper is played to the human only: Twilio fetches the <Number url>
+      // when they answer, and that TwiML never reaches the customer's leg.
+      await this.api()
+        .calls(this.twilioCallSid)
+        .update({
+          // `action` is what happens when the Dial ends, and it has to be there
+          // whether or not anyone answered: the <Dial> is the last verb in this
+          // document, so without it a transfer nobody picks up drops the
+          // customer in silence, a second after being told a colleague is
+          // coming. That is what happened on the seventh journey call.
+          twiml:
+            `<Response><Dial answerOnBridge="true" action="${env.publicBaseUrl}/twilio/handoff-result/${this.id}" method="POST">` +
+            `<Number url="${env.publicBaseUrl}/twilio/whisper?text=${encodeURIComponent(whisper)}">${toNumber}</Number>` +
+            `</Dial></Response>`,
+        });
+    } catch (err) {
+      // Nobody was dialled, so the call is still ours and the documented
+      // fallback needs to be able to hang it up.
+      this.transferred = false;
+      throw err;
+    }
 
     log.call(this.id, `transferred to ${toNumber} - whisper: ${whisper}`);
-    this.transferred = true;
     this.end("transferred");
   }
 
@@ -649,10 +729,16 @@ export class TwilioTransport implements Transport {
     if (this.dead) return;
     this.dead = true;
     this.stt?.close();
-    try {
-      this.ws?.close();
-    } catch {
-      /* already closed */
+    // Closing our end of a <Connect><Stream> is itself a way to end the call:
+    // the verb finishes and the call falls off the end of its TwiML. Once the
+    // call has been handed over, the wire belongs to Twilio's <Dial> and the
+    // teardown is theirs to do.
+    if (!this.transferred) {
+      try {
+        this.ws?.close();
+      } catch {
+        /* already closed */
+      }
     }
     log.call(
       this.id,

@@ -1,4 +1,4 @@
-import type { FormState, Lead } from "@recall/shared";
+import type { FormField, FormState, Lead } from "@recall/shared";
 
 /**
  * Journey field ids to the sandbox's payload keys.
@@ -82,7 +82,50 @@ export function buildPayload(opts: {
   };
 }
 
-/** Which payload section a journey section maps to, for the incremental PUTs. */
+/**
+ * One field's save body.
+ *
+ * A field is saved the moment it is confirmed, so this is the unit the sandbox
+ * sees most often. It carries the provenance beside the value rather than in a
+ * separate block: the whole point of saving per field is that the receiving
+ * system learns *when* and *how sure* as it goes, not at the end.
+ *
+ * `source` is derived rather than stored. A field with no evidence span was never
+ * heard on this call - it came in on the lead from the web journey, and the read-back
+ * only confirmed it.
+ */
+export type FieldSave = {
+  lead_id: string;
+  field: string;
+  section: string;
+  value: unknown;
+  confidence: number | null;
+  confirmed: boolean;
+  source: "voice" | "web_journey";
+  evidence: string | null;
+  captured_at: string;
+};
+
+export function buildFieldSave(opts: {
+  lead: Lead;
+  field: FormField;
+  section: string;
+}): FieldSave {
+  const { lead, field } = opts;
+  return {
+    lead_id: lead.id,
+    field: field.id,
+    section: opts.section,
+    value: field.value,
+    confidence: field.confidence,
+    confirmed: true,
+    source: field.evidence ? "voice" : "web_journey",
+    evidence: field.evidence,
+    captured_at: new Date(field.updated_at).toISOString(),
+  };
+}
+
+/** Which payload section a journey section maps to. */
 export const SECTION_TO_STEP: Record<string, string> = {
   identity: "customer",
   contact: "customer",

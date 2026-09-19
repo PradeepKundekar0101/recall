@@ -120,6 +120,7 @@ async function main(): Promise<void> {
         onOutcome: () => {},
         onSubmit: () => {},
         persistField: () => {},
+        onTurnTiming: () => {},
       },
     });
 

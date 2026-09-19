@@ -58,8 +58,11 @@ export class JourneyState {
    */
   readonly transcript: TranscriptLine[] = [];
 
-  /** Sections already sent to the sandbox, so a section is never PUT twice. */
-  readonly submittedSections = new Set<string>();
+  /**
+   * Fields already saved, so the same value is never PUT twice. A correction takes
+   * its field back out, because the replacement is a different value.
+   */
+  readonly savedFields = new Set<string>();
 
   constructor(
     readonly callId: string,
@@ -88,21 +91,6 @@ export class JourneyState {
     }
     const at = this.transcript.indexOf(line);
     if (at >= 0) this.transcript.splice(at, 1);
-  }
-
-  /**
-   * A section is complete when every applicable field in it is confirmed.
-   *
-   * Optional fields count once they have been asked and resolved, including the
-   * ones the customer did not have - those are recorded confirmed with no value.
-   */
-  sectionComplete(sectionId: string): boolean {
-    const fields = this.journey.fields.filter((f) => f.section === sectionId && this.form.applies(f.id));
-    if (!fields.length) return false;
-    return fields.every((f) => {
-      const state = this.form.get(f.id)?.state;
-      return state === "confirmed" || state === "submitted";
-    });
   }
 
   get consent(): boolean {
@@ -206,6 +194,7 @@ export class JourneyState {
       ...journey.sections.map((s) => s.intro),
       ...JourneyState.FILLERS,
       "Sorry, are you still there?",
+      "Sorry, I didn't catch that.",
       "I'll let you go for now. Thanks for your time.",
     ];
   }

@@ -1,4 +1,4 @@
-import type { SpeakResult, Transport, TransportDeps, TransportEndReason } from "../engine/transport.js";
+import type { AudioMeta, SpeakResult, Transport, TransportDeps, TransportEndReason } from "../engine/transport.js";
 import { log } from "../log.js";
 
 /**
@@ -80,11 +80,17 @@ export class SimTransport implements Transport {
     log.call(this.id, `sim transport - persona "${this.opts.persona.id}"`);
   }
 
-  async speak(text: string, opts: { onFirstAudio?: () => void } = {}): Promise<SpeakResult> {
+  async speak(
+    text: string,
+    opts: { onFirstAudio?: () => void; onAudioMeta?: (meta: AudioMeta) => void } = {}
+  ): Promise<SpeakResult> {
     // The sim has no wire, so every line is heard whole; the Interrupter persona
     // signals barge-in below rather than cutting anything.
     const heard: SpeakResult = { completed: true, heard: text };
     if (this.dead) return { completed: false, heard: "" };
+    // The sim never touches ElevenLabs. Reported as cached so a simulated call
+    // never contributes a zero to the live synthesis statistics.
+    opts.onAudioMeta?.({ cached: true, chars: text.length });
     opts.onFirstAudio?.();
     this.spoken.push(text);
     log.call(this.id, `agent: ${text}`);
@@ -163,14 +169,16 @@ export class SimTransport implements Transport {
   }
 
   /** Collapses the stream to one line; the sim has no wire and no barge-in race. */
-  async speakStream(sentences: AsyncIterable<string>, signal?: AbortSignal): Promise<string> {
+  async speakStream(sentences: AsyncIterable<string>, signal?: AbortSignal, onFirstAudio?: () => void): Promise<string> {
     let spoken = "";
     for await (const sentence of sentences) {
       if (signal?.aborted || this.dead) break;
       spoken += `${sentence} `;
     }
     const text = spoken.trim();
-    if (text) await this.speak(text);
+    // The collapsed line is the sim's only "audio", so the equivalent of the
+    // first buffer reaching the wire is this single speak() call.
+    if (text) await this.speak(text, { onFirstAudio });
     return text;
   }
 

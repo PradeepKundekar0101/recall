@@ -19,10 +19,19 @@ export type ToolSchema = {
 
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 
+/** What one model call cost, as the provider reported it. */
+export type TokenUsage = { prompt: number; completion: number; model: string };
+
 export type LlmProviderApi = {
   readonly id: string;
-  /** One structured call, one validated object back. */
-  toolCall<T>(opts: { system: string; user: string; tool: ToolSchema; model: string; maxTokens: number }): Promise<T>;
+  /** One structured call, one validated object back, plus what it cost. */
+  toolCall<T>(opts: {
+    system: string;
+    user: string;
+    tool: ToolSchema;
+    model: string;
+    maxTokens: number;
+  }): Promise<{ value: T; usage: TokenUsage | null }>;
   /** Yields whole sentences as they complete. */
   streamSentences(opts: {
     system: string;

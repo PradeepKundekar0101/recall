@@ -66,6 +66,32 @@ const BOOLS: { input: string; expect: boolean | null }[] = [
   { input: "No, nothing like that.", expect: false },
   { input: "nope", expect: false },
   { input: "no, that's right", expect: true },
+  // Call aead90d7. Asked "so that's the 1st of September, 2002?" the customer
+  // said "Right." and the engine heard neither a yes nor a no, threw the date
+  // away and asked for it again. The recording is unambiguous; the live
+  // transcript rendered it "Thank you." at 0.50, which is its own reason not to
+  // depend on hearing a longer word.
+  { input: "Right.", expect: true },
+  { input: "right, that's it", expect: true },
+  // The common tail. The list can never be finished - the model decides what
+  // falls past it - but the words people actually say to a read-back should not
+  // cost a round trip.
+  { input: "Gotcha.", expect: true },
+  { input: "Spot on.", expect: true },
+  { input: "Perfect.", expect: true },
+  { input: "Exactly.", expect: true },
+  { input: "You got it.", expect: true },
+  { input: "Absolutely.", expect: true },
+  { input: "Of course.", expect: true },
+  { input: "Mm-hmm.", expect: true },
+  // Agreement that starts with the word "no", which the no pattern used to take
+  // at face value and clear the value on.
+  { input: "No worries.", expect: true },
+  { input: "No problem, that's the one.", expect: true },
+  // Both a yes word and a no word in one breath. Only an unambiguous agreement
+  // phrase settles it; anything else is left for the model to judge.
+  { input: "Yeah nah, that's the one.", expect: true },
+  { input: "No, spot on.", expect: true },
   { input: "maybe later", expect: null },
 ];
 
@@ -126,8 +152,8 @@ for (const [postcode, want] of [["2150", "NSW"], ["3000", "VIC"], ["4000", "QLD"
 const SPOKEN: { field: string; value: string; expect: string }[] = [
   { field: "dob", value: "1989-03-07", expect: "7th of March, 1989" },
   { field: "postcode", value: "2150", expect: "2 1 5 0" },
-  { field: "phone", value: "+61412345678", expect: "0 4 1 2 3 4 5 6 7 8" },
   { field: "nmi", value: "6001234567", expect: "6 0 0 1 2 3 4 5 6 7" },
+  { field: "phone", value: "+61412345678", expect: "0 4 1 2 3 4 5 6 7 8" },
   { field: "connection_type", value: "move_in", expect: "move in" },
   { field: "full_name", value: "Priya Sharma", expect: "Priya Sharma" },
 ];

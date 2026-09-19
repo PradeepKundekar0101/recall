@@ -21,7 +21,10 @@
     "normalise:check": "pnpm --filter orchestrator normalise:check",
     "dialogue:check": "pnpm --filter orchestrator dialogue:check",
     "tts:check": "pnpm --filter orchestrator tts:check",
-    "transport:check": "pnpm --filter orchestrator transport:check"
+    "usage:check": "pnpm --filter orchestrator usage:check",
+    "transport:check": "pnpm --filter orchestrator transport:check",
+    "setup:check": "pnpm --filter orchestrator setup:check",
+    "analytics:check": "pnpm --filter orchestrator analytics:check"
   },
   "engines": {
     "node": ">=20 <21"

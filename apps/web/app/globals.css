@@ -128,16 +128,26 @@ body::after {
 
 /* ---------- shell ---------- */
 
+/* The standing rail and the page, side by side. The page still stacks in a
+   column - that column is .console-main, and it is what the shell used to be. */
 .console {
   position: relative;
   z-index: 1;
   display: flex;
-  flex-direction: column;
-  gap: 14px;
+  gap: var(--gutter);
   height: 100vh;
   max-width: 1680px;
   margin: 0 auto;
   padding: 0 var(--gutter) var(--gutter);
+}
+
+.console-main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
 }
 
 /* Flex items default to min-width:auto, so a row full of nowrap content grows
@@ -145,11 +155,61 @@ body::after {
    by it. That is what once pushed the console sideways and clipped the
    escalation pane; the bound has to be set here for the shrink rules below to
    ever take effect. */
-.console > * { min-width: 0; }
+.console-main > * { min-width: 0; }
 
-/* ---------- nav ---------- */
+/* ---------- the rail and the standing views ----------
+   The console has exactly two places you go and stay, and setting up a call is
+   not one of them - that is a flow, and it starts at the wordmark above them.
+   Set as text rather than as pills so the chrome still has one button in it. */
 
-.nav {
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 200px;
+  padding-right: var(--gutter);
+  border-right: 1px solid var(--hairline);
+}
+
+/* The same 64px the page's bar runs to, so the wordmark sits on the line the
+   page's own heading starts from. */
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  height: 64px;
+  flex: 0 0 auto;
+}
+
+.nav-links {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+.nav-link {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 120ms ease, color 120ms ease;
+}
+.nav-link:hover { color: var(--ink); background: var(--surface-strong); }
+/* Down the rail a link is a row, so the view you are in is a filled row rather
+   than only a darker word - the same wash the hover uses, no new colour. */
+.nav-link-on {
+  color: var(--ink);
+  background: var(--surface-strong);
+}
+
+/* ---------- the page's own bar ----------
+   What belongs to the page you are on: the steps, and whatever the page puts
+   on the right. It keeps its height on a page that passes it neither, so the
+   rail's wordmark and a page's first heading line up across routes. */
+
+.pagebar {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -164,9 +224,6 @@ body::after {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding-right: 16px;
-  margin-right: 4px;
-  border-right: 1px solid var(--hairline-strong);
 }
 .wordmark-name {
   font-family: var(--font-display);
@@ -238,6 +295,104 @@ body::after {
   cursor: pointer;
 }
 .select:hover { border-color: var(--ink); }
+
+/* Radix Select (the shadcn/ui component, restyled on this project's tokens
+   instead of Tailwind - see [seed-row] below for where it replaces the
+   native <select>). Trigger mirrors .select-sm's box; content is a popover
+   card with the same radius/shadow language as the rest of the console. */
+.select-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  height: 36px;
+  min-width: 0;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--hairline-strong);
+  background-color: var(--surface);
+  color: var(--ink);
+  font: 400 14px var(--font-sans);
+  letter-spacing: 0.01em;
+  cursor: pointer;
+}
+.select-trigger[data-placeholder] { color: var(--muted-soft); }
+.select-trigger:hover { border-color: var(--ink); }
+.select-trigger:focus-visible,
+.select-trigger[data-state="open"] {
+  outline: none;
+  border-color: var(--ink);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+.select-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.select-trigger-icon {
+  flex: none;
+  color: var(--muted);
+  transition: transform 140ms ease;
+}
+.select-trigger[data-state="open"] .select-trigger-icon { transform: rotate(180deg); }
+
+.select-content {
+  z-index: 20;
+  overflow: hidden;
+  min-width: var(--radix-select-trigger-width);
+  max-height: var(--radix-select-content-available-height);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft), 0 1px 2px rgba(12, 10, 9, 0.06);
+}
+.select-viewport { padding: 4px; }
+.select-label {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.select-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 10px 0 28px;
+  border-radius: var(--radius-sm);
+  font: 400 14px var(--font-sans);
+  color: var(--ink);
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+}
+.select-item[data-highlighted] { background: var(--row); }
+.select-item[data-disabled] {
+  color: var(--muted-soft);
+  cursor: not-allowed;
+}
+.select-item-indicator {
+  position: absolute;
+  left: 10px;
+  display: inline-flex;
+  width: 12px;
+  color: var(--ink);
+}
+.select-separator {
+  height: 1px;
+  margin: 4px -4px;
+  background: var(--hairline);
+}
+.select-scroll-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  color: var(--muted);
+  cursor: pointer;
+}
 
 /* Chips are the product's tinted pills. The test-run chip is a guardrail
    made visible, and a simulated call outranks it: that one is going to ring a
@@ -351,6 +506,7 @@ body::after {
 .status-answered, .status-live { background: var(--success-line); }
 .status-live { animation: pulse 1.6s ease-in-out infinite; }
 .status-handoff { background: var(--error-line); }
+.status-lost { background: var(--error-line); }
 
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
@@ -395,6 +551,9 @@ body::after {
 .orb-handoff .orb-ring { border-color: var(--error-line); }
 .orb-handoff .orb-img { box-shadow: 0 0 0 5px var(--error-tint); }
 .orb-ended .orb-img { filter: grayscale(1); opacity: 0.45; }
+/* The console lost the orchestrator mid-call: grey, with a broken ring. */
+.orb-lost .orb-img { filter: grayscale(1); opacity: 0.6; }
+.orb-lost .orb-ring { border-color: var(--hairline-strong); border-style: dashed; }
 
 @keyframes orb-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
 @keyframes orb-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
@@ -498,16 +657,6 @@ body::after {
   margin-top: 1px;
   object-fit: cover;
   box-shadow: inset 0 0 0 1px rgba(12, 10, 9, 0.06);
-}
-.avatar-initials {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--surface-strong);
-  color: var(--body);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
 }
 .turn-body { min-width: 0; }
 .turn-head {
@@ -732,6 +881,134 @@ body::after {
 .script-pos-head { margin-top: 22px; }
 .script-pos { color: var(--body); }
 
+/* A pane that sits on its own below the row rather than in it. Bounded so a
+   growing log scrolls inside itself instead of stealing height from the three
+   panes above, which on a 100vh shell it otherwise would. */
+.pane-flat {
+  flex: 0 0 auto;
+  max-height: 200px;
+  transition: max-height 140ms ease;
+}
+/* A row is open, so someone is reading JSON rather than watching the ticker. The
+   three panes above scroll internally and give the room up. */
+.pane-flat-open { max-height: min(46vh, 420px); }
+
+/* ---------- API logs ----------
+   One row per request to the receiving system. The method sits in a mono chip on
+   the left and the status in the semantic chip on the right, so a screenful of
+   green 200s reads at a glance from the back of a room, and the one red row does
+   not have to be hunted for. */
+
+.apilog {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.apirow {
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-md);
+  background: var(--canvas-soft);
+}
+.apirow.api-bad {
+  border-color: var(--error-tint);
+  background: var(--error-tint);
+}
+
+.apirow-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.apirow-head:focus-visible { outline-offset: -2px; }
+
+.apimethod {
+  flex: 0 0 auto;
+  min-width: 42px;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-strong);
+  color: var(--primary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: center;
+}
+.apimethod-post { background: var(--ink); color: var(--on-primary); }
+
+.apipath {
+  /* A long lead id must not push the status chip off the row. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--body);
+}
+
+.apitag {
+  flex: 0 0 auto;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.apims {
+  flex: 0 0 auto;
+  min-width: 54px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  text-align: right;
+}
+.apichevron {
+  flex: 0 0 auto;
+  width: 12px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--muted-soft);
+  text-align: center;
+}
+
+.apibody {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 4px 12px 12px;
+  border-top: 1px solid var(--hairline-soft);
+}
+.apiside { min-width: 0; }
+.apijson {
+  margin: 6px 0 0;
+  max-height: 170px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--body);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 900px) {
+  .apibody { grid-template-columns: 1fr; }
+}
+
 /* ---------- payload drawer ---------- */
 
 .drawer {
@@ -860,19 +1137,1101 @@ body::after {
   border-radius: 4px;
 }
 
+/* ---------- the two parties ---------- */
+
+.parties {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+/* The customer's face, or their initials where no portrait exists. */
+.portrait {
+  width: var(--portrait-size, 40px);
+  height: var(--portrait-size, 40px);
+  border-radius: 50%;
+  object-fit: cover;
+  flex: 0 0 auto;
+  background: var(--surface-strong);
+  box-shadow: inset 0 0 0 1px rgba(12, 10, 9, 0.08);
+}
+.portrait-initials {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--body);
+  font-weight: 600;
+  font-size: calc(var(--portrait-size, 40px) * 0.38);
+  letter-spacing: 0.02em;
+}
+
+/* ---------- stepper ---------- */
+
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  margin: 0 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+.step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--surface-strong);
+  color: var(--muted);
+}
+.step-active { color: var(--ink); }
+.step-active .step-num { background: var(--ink); color: var(--on-primary); }
+.step-done .step-num { background: var(--success-tint); color: var(--success); }
+
+/* ---------- step one: the customer ---------- */
+
+.step-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 10px 4px 4px;
+}
+.intro-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: 34px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.intro-sub {
+  margin: 6px 0 0;
+  color: var(--muted);
+  max-width: 56ch;
+}
+
+.lead-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  max-width: 1080px;
+}
+.lead-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 22px 22px 20px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-xl);
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  transition: box-shadow 140ms ease, border-color 140ms ease;
+}
+.lead-card:hover {
+  border-color: var(--hairline-strong);
+  box-shadow: var(--shadow-soft);
+}
+.lead-card-selected,
+.lead-card-selected:hover {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+.lead-card .portrait { margin-bottom: 8px; }
+.lead-card-name {
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.lead-card-id {
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.lead-card-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline-soft);
+  font-size: 13px;
+  color: var(--body);
+}
+.lead-card .chip { margin-top: 12px; }
+.step-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  max-width: 1080px;
+}
+
+/* ---------- step two: fields and brief ---------- */
+
+.setup {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 16px;
+  flex: 1 1 0;
+  min-height: 0;
+}
+.card-flush {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px 12px;
+  border-bottom: 1px solid var(--hairline-soft);
+  flex: 0 0 auto;
+}
+/* A head inside a padded card: same row, no chrome of its own. */
+.card-head-flush {
+  padding: 0 0 10px;
+  border-bottom: 0;
+}
+.card-body {
+  padding: 14px 20px 20px;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--hairline-strong) transparent;
+}
+.card-hint {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.setup-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* One field per row: label, the input, and the button beside it. A seeded
+   row is tinted the same blue the live form uses for a prefilled field, so
+   the operator learns the colour before the call starts. */
+.seed-row {
+  display: grid;
+  grid-template-columns: minmax(9ch, 15ch) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 4px 0;
+}
+.seed-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.seed-input,
+.select-sm {
+  height: 36px;
+  width: 100%;
+  min-width: 0;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--hairline-strong);
+  background-color: var(--surface);
+  color: var(--ink);
+  font: 400 14px var(--font-sans);
+  letter-spacing: 0.01em;
+  flex: none;
+}
+.select-sm { padding-right: 30px; }
+.seed-input::placeholder { color: var(--muted-soft); }
+.seed-input:focus,
+.select-sm:focus,
+.brief-input:focus {
+  outline: none;
+  border-color: var(--ink);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+.seed-row-seeded .seed-input,
+.seed-row-seeded .select-sm {
+  border-color: var(--info-line);
+  background-color: var(--info-tint);
+  color: var(--info);
+}
+.btn-sm {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+  min-width: 78px;
+}
+
+.tones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.tone {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--pill);
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface);
+  color: var(--ink);
+  font: 500 13px var(--font-sans);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.tone:hover { border-color: var(--ink); }
+.tone-on {
+  background: var(--primary);
+  color: var(--on-primary);
+  border-color: var(--primary);
+}
+.brief-input {
+  display: block;
+  width: 100%;
+  min-height: 120px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface);
+  color: var(--ink);
+  font: 400 14px/1.5 var(--font-sans);
+  letter-spacing: 0.01em;
+  resize: vertical;
+}
+.brief-input::placeholder { color: var(--muted-soft); }
+.brief-count {
+  margin-top: 6px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.predial-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+.predial-rows > div {
+  display: grid;
+  grid-template-columns: 8ch 1fr;
+  gap: 12px;
+}
+.predial-rows dt { color: var(--muted); }
+.predial-rows dd { margin: 0; color: var(--ink); }
+.predial .notice { margin-bottom: 14px; }
+.predial-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* The brief, once, at the top of the live transcript. */
+.brief-note {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-strong);
+  font-size: 13px;
+  color: var(--body);
+}
+.brief-note .label { display: block; margin-bottom: 2px; }
+.brief-note p { margin: 0; }
+
+/* ---------- links that look like the pills ---------- */
+
+a.btn,
+a.wordmark {
+  text-decoration: none;
+  color: inherit;
+}
+/* The anchor rule above outranks .btn-primary on colour alone. */
+a.btn-primary { color: var(--on-primary); }
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------- past calls ---------- */
+
+.call-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 1080px;
+}
+.call-row {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1.3fr) minmax(0, 1fr) 6ch 6ch auto;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 18px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.call-row:hover {
+  border-color: var(--hairline-strong);
+  box-shadow: var(--shadow-soft);
+}
+.call-row-who {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.call-row-name {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.call-row-sub {
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.call-row-when {
+  font-size: 13px;
+  color: var(--body);
+  white-space: nowrap;
+}
+.call-row-num {
+  font-size: 13px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.call-row-tags {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+/* The recording, in the transcript's header where the streaming state was. */
+.player {
+  height: 32px;
+  width: 250px;
+  max-width: 100%;
+}
+
 /* ---------- responsive ----------
    The console targets a 1440px projector, but the handoff view gets opened on
    whatever laptop is nearest, so it has to hold up narrow. */
 @media (max-width: 1100px) {
-  .console { height: auto; min-height: 100vh; }
-  .nav { flex-wrap: wrap; height: auto; padding: 12px 0; }
+  .console { flex-direction: column; height: auto; min-height: 100vh; gap: 0; }
+  /* The rail lies down rather than collapsing behind a button: two text links
+     and the wordmark fit across the top, which is where they used to be. */
+  .sidebar {
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 16px;
+    padding-right: 0;
+    border-right: none;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .sidebar-head { height: 56px; }
+  .nav-links { flex-direction: row; align-items: center; gap: 4px; }
+  .pagebar { flex-wrap: wrap; height: auto; padding: 12px 0; }
   .callhead { flex-wrap: wrap; }
   .stats { margin-left: 0; gap: 24px; width: 100%; }
   .panes { grid-template-columns: 1fr; }
   .pane-body { max-height: 46vh; }
   .handoff-grid { grid-template-columns: 1fr; }
+  .setup { grid-template-columns: 1fr; overflow-y: auto; }
+  .setup-fields .card-body { max-height: 60vh; }
+  .lead-grid { grid-template-columns: 1fr 1fr; }
+  .stepper { order: 3; width: 100%; margin: 0; }
+  .call-row { grid-template-columns: 40px minmax(0, 1fr) auto; }
+  .call-row-when, .call-row-num { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* ---------- analytics ----------
+   The charts are drawn by hand in SVG, so this section is mostly the frame
+   around them: the tile, the two stacked bars, the field table and the notice
+   that goes up instead of a trend. Every fill is a variable from the top of
+   this file - the dashboard is the same off-white console as everything else,
+   not a dark instrument panel bolted onto it. */
+
+/* One headline number. Reads as a card, like .call-row, because that is what
+   the rest of the product has taught the operator a white box on a hairline is. */
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+}
+.tile-label {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+/* Proportional figures, not tabular: these change when the window changes, not
+   every second, so nothing has to hold its column, and tabular digits make a
+   number this size look loose. */
+.tile-value {
+  font-size: 28px;
+  font-weight: 400;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.tile-sub {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+/* The threshold, drawn. The track is the same plate the escalation lanes use,
+   so a meter reads the same way in both places. */
+.tile-meter {
+  margin-top: 3px;
+  height: 6px;
+  background: var(--surface-strong);
+  border-radius: var(--pill);
+  overflow: hidden;
+}
+.tile-meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--muted-soft);
+  border-radius: var(--pill);
+}
+.tile-good .tile-meter-fill { background: var(--success-line); }
+.tile-warn .tile-meter-fill { background: var(--warn-line); }
+.tile-bad .tile-meter-fill { background: var(--error-line); }
+/* Only the verdict that fails is written in a colour, the same way .stat-over
+   is the one number on a live call that turns red. */
+.tile-warn .tile-value { color: var(--warn); }
+.tile-bad .tile-value { color: var(--error); }
+
+/* ---------- charts ---------- */
+
+.chart-figure { margin: 0; }
+.chart {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+/* Axis ticks line up in a column, so these are the one place tabular digits
+   are the right choice. */
+.chart-axis {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.chart-note {
+  font-size: 11px;
+  font-weight: 500;
+}
+.chart-caption {
+  margin: 10px 0 0;
+  max-width: 62ch;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* ---------- the two stacked bars ----------
+   Stages and outcomes are the same shape: one track cut into slices, then a key
+   naming every slice underneath. The key is not optional - the amber and the
+   two lighter greys do not clear 3:1 on white, so the colour alone is never
+   what tells you which slice is which. */
+
+.stages-bar,
+.outcomes-bar {
+  display: flex;
+  /* White doing the separating. A stroke around each slice would add ink that
+     is not data; a gap in the surface colour costs nothing. */
+  gap: 2px;
+  height: 14px;
+  border-radius: var(--pill);
+  overflow: hidden;
+}
+.stages-slice,
+.outcomes-slice {
+  flex-basis: 0;
+  min-width: 2px;
+}
+
+.stages-key,
+.outcomes-key {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+.stages-dot,
+.outcomes-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--pill);
+  flex: 0 0 auto;
+}
+
+.stages-key {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.stages-key li {
+  display: grid;
+  grid-template-columns: 8px minmax(0, max-content) 7ch minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  font-size: 13px;
+}
+.stages-name { color: var(--ink); }
+.stages-ms {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.stages-hint {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.stages-total {
+  margin: 12px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.outcomes-key {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 7px 20px;
+}
+.outcomes-key li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+/* The server's keys are snake_case; the component unpicks the underscores and
+   this lifts the first letter, so "no_answer" reads as "No answer" without the
+   component owning a second copy of every outcome's name. */
+.outcomes-name { color: var(--ink); }
+.outcomes-name::first-letter { text-transform: uppercase; }
+.outcomes-n {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- field table ----------
+   Numbers right, name left, and the only colour is on the count that says the
+   agent had to ask twice. */
+
+/* The table scrolls inside its own card on a narrow window. Without this the
+   five columns push the console sideways, the same failure .console > * guards
+   against further up this file. */
+.field-table-wrap {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--hairline-strong) transparent;
+}
+.field-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.field-table th,
+.field-table td {
+  padding: 9px 10px;
+  text-align: right;
+  border-bottom: 1px solid var(--hairline);
+}
+.field-table th:first-child,
+.field-table td:first-child {
+  padding-left: 0;
+  text-align: left;
+}
+.field-table td:last-child { padding-right: 0; }
+.field-table thead th {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+  border-bottom-color: var(--hairline-strong);
+}
+.field-table tbody th {
+  font-weight: 500;
+  color: var(--ink);
+}
+.field-table tbody th::first-letter { text-transform: uppercase; }
+.field-table tbody td {
+  color: var(--body);
+  font-variant-numeric: tabular-nums;
+}
+.field-table tbody tr:last-child th,
+.field-table tbody tr:last-child td { border-bottom: none; }
+.field-table .chip { margin-left: 10px; }
+.num-warn {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+/* Not enough calls to draw. The count is set large because the count is the
+   whole message: the window is thin, and the chart that would have gone here
+   would have been a picture of nothing. */
+.thin {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 16px 18px;
+  background: var(--surface-strong);
+  border-radius: var(--radius-lg);
+}
+.thin-count {
+  font-size: 26px;
+  line-height: 1;
+  color: var(--ink);
+}
+.thin-text {
+  max-width: 48ch;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+@media (max-width: 760px) {
+  /* The hint is the first thing to go: on a phone the stage name and its
+     median still fit on one line, and the hint reads fine underneath. */
+  .stages-key li {
+    grid-template-columns: 8px minmax(0, 1fr) 7ch;
+  }
+  .stages-hint { grid-column: 2 / -1; }
+}
+
+/* ---------- the analytics page ----------
+   The dashboard is one column of bands: the controls and the window they
+   resolved to, four headline numbers, then three rows that each pair a chart
+   with the thing that reads it. The frame stays the console's - white cards on
+   hairlines over the off-white floor - because the numbers are loud enough. */
+
+/* The shell runs to 1680px for a projector, which is wider than any of this
+   wants to be: a chart stretched that far flattens its own slope, and four
+   tiles across it become four lonely numbers. */
+.analytics > * { max-width: 1240px; }
+
+.analytics-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+}
+
+/* One window of four, so a track rather than four loose pills: the group is the
+   control and the chosen one is a plate lifted out of it. The ink fill stays
+   reserved for the one primary action in the nav. */
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--pill);
+  background: var(--surface-strong);
+}
+.segmented-option {
+  height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--pill);
+  background: transparent;
+  color: var(--muted);
+  font: 500 13px var(--font-sans);
+  letter-spacing: 0;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.segmented-option:hover { color: var(--ink); }
+.segmented-option.is-on {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-soft);
+}
+
+/* Simulated calls change which calls are counted, not which view of them is
+   shown, so this is a checkbox rather than a fifth segment. */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--body);
+  cursor: pointer;
+}
+.toggle:hover { color: var(--ink); }
+.toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+/* The dates behind the window's label, set quietly at the far end of its own
+   control: it is the caption on the numbers, not a number itself. */
+.provenance {
+  margin: 0 0 0 auto;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The orchestrator's own words, under the sentence that frames them rather than
+   inside it: its 503 body already carries a colon. */
+.notice-detail {
+  display: block;
+  margin-top: 3px;
+  font-weight: 400;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+/* Four, then two, then one. auto-fit would have dropped to three across the
+   middle of the range and left the fourth tile alone on a row of its own, and
+   an orphaned headline number reads as the odd one out rather than as the
+   fourth of four. */
+.analytics-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+/* Why the two thresholds above are drawn in grey. Set as a footnote rather than
+   as another Thin plate: the tiles still have their numbers to show, so this is
+   a caveat on them, not a refusal to draw them. */
+.tiles-note {
+  margin: -4px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  max-width: 62ch;
+}
+
+/* The chart takes the width; whatever reads it takes the rest. */
+.analytics-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+/* What the card is, then what it is drawn from, then the drawing. The title and
+   its sub travel together so the gap below them is one rule rather than a
+   different one per card. */
+.card-lede { margin-bottom: 14px; }
+.card-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.card-sub {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  max-width: 62ch;
+}
+/* An empty state inside a card is already under a lede, so it does not need the
+   standing room .empty takes when it stands alone in a pane. */
+.analytics .card .empty { padding: 2px 0 4px; }
+
+/* One row per number, with the numbers in a column of their own so four of them
+   read down the right edge rather than trailing their labels. */
+.usage-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.usage-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--hairline-soft);
+  font-size: 13px;
+  color: var(--muted);
+}
+.usage-list li:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+.usage-list li > span:last-child {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  /* A 640px chart and a key beside it stop being two columns well before the
+     console does, so this matches the shell's own breakpoint. */
+  /* minmax(0, 1fr) rather than 1fr: a plain 1fr track is min-width auto, so the
+     field table's five columns would set the card's width and push the whole
+     console sideways instead of scrolling inside their own wrapper. */
+  .analytics-row { grid-template-columns: minmax(0, 1fr); }
+  .analytics-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 560px) {
+  .analytics-tiles { grid-template-columns: minmax(0, 1fr); }
+  /* Wrapped, the auto margin would push the dates to the far side of a line
+     they are alone on. */
+  .provenance { margin-left: 0; }
+}
+
+/* ---------- one call's turn timing ----------
+   The dashboard's stage bar unrolled: one bar per turn instead of one bar for
+   the median, drawn on a scale the whole list shares. Same three stages in the
+   same three colours, because the per-call view and the dashboard are looking
+   at the same measurement and should not look like two different ones. */
+
+.call-timing {
+  /* The shell is one 100vh column with the live panes taking whatever is left,
+     so this card sizes to its own content instead of competing for theirs. */
+  flex: 0 0 auto;
+}
+
+/* The list runs down the width the page has spare rather than down its height,
+   which on a fixed-height shell is the scarce one. */
+.call-timing-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 272px);
+  gap: 16px 28px;
+  align-items: start;
+}
+
+.timing-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 0 0 9px;
+  padding: 0;
+  list-style: none;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.timing-key li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.timing-list {
+  /* A long call runs to forty turns. Bounded and scrolled inside the card, so
+     the list can grow without the page growing under the panes above it. */
+  max-height: 146px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.timing-row {
+  display: grid;
+  grid-template-columns: 2ch minmax(0, 1fr) 6ch minmax(0, 17ch);
+  align-items: center;
+  gap: 12px;
+  font-size: 12.5px;
+}
+
+.timing-n {
+  color: var(--muted-soft);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.timing-bar {
+  position: relative;
+  display: flex;
+  height: 10px;
+  background: var(--surface-strong);
+  border-radius: var(--pill);
+  overflow: hidden;
+}
+/* No gap between the slices, unlike the dashboard's stage bar. There the three
+   are shares of one whole and the gap comes out of the track first; here every
+   width is an absolute number of milliseconds on a shared scale, and a gap
+   would move the bar's right edge off the total it is supposed to land on. */
+.timing-slice { flex: 0 0 auto; }
+
+/* The budget, at the same place on every row, which is what makes the stack a
+   comparison rather than a list. Dashed for the reason the dashboard's is: it
+   is the one line on screen that was decided rather than measured. */
+.timing-rule {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px dashed var(--error-line);
+}
+
+.timing-total {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.timing-row.over .timing-total { color: var(--error); }
+
+.timing-kind {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.call-timing .chart-caption { margin-top: 12px; }
+
+@media (max-width: 1100px) {
+  /* Same breakpoint the rest of the console restacks on. */
+  .call-timing-body { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 560px) {
+  /* The kind is the first thing to wrap: the bar and its total are what the row
+     is for, and a name like "played from cache" cannot share a phone-width line
+     with them. */
+  .timing-row {
+    grid-template-columns: 2ch minmax(0, 1fr) 6ch;
+    row-gap: 2px;
+  }
+  .timing-kind { grid-column: 2 / -1; }
+}
+
+/* ---------- first audio by kind of turn ----------
+   Under the stage bar, in the same card, because the split is what makes the
+   blended bar above it readable rather than a second subject. One ink-coloured
+   track per kind on a scale the rows share: the kinds are named in text, so
+   colour is carrying nothing here and a second palette would only compete with
+   the three stage colours right above. */
+
+.kinds {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline-soft);
+}
+.kinds-lede {
+  margin: 0 0 12px;
+  max-width: 62ch;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.kinds-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* The same column rhythm as .stages-key, so the two blocks in this card read as
+   one table rather than as two components that happened to land together. */
+.kinds-list li {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr) 7ch minmax(0, max-content);
+  gap: 10px;
+  align-items: center;
+  font-size: 13px;
+}
+.kinds-name {
+  color: var(--ink);
+  white-space: nowrap;
+}
+.kinds-track {
+  height: 8px;
+  border-radius: var(--pill);
+  background: var(--surface-strong);
+  overflow: hidden;
+}
+/* Ink rather than a semantic colour: this bar says how long, not how good. */
+.kinds-fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: var(--pill);
+  background: var(--primary);
+}
+.kinds-ms {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.kinds-n {
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  /* Same move .stages-key makes at this width: the name and its median hold the
+     line, and the count goes underneath rather than squeezing the track out. */
+  .kinds-list li {
+    grid-template-columns: minmax(0, 1fr) 7ch;
+    row-gap: 3px;
+  }
+  .kinds-track { grid-column: 1 / -1; grid-row: 2; }
+  .kinds-n { grid-column: 1 / -1; grid-row: 3; }
+}
+
+/* The raw count under the rate the table is sorted by. Quiet, because the rate
+   is the comparison and the count is the evidence for it, and on its own line
+   because a rate and a count side by side are two numbers a reader has to pull
+   apart before either of them means anything. */
+.num-aside {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  white-space: nowrap;
 }

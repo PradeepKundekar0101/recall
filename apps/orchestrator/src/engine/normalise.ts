@@ -233,8 +233,10 @@ export function normaliseNmi(raw: string): NormResult {
  * they were in a hurry - the exact customer least likely to tolerate that.
  */
 const YES =
-  /\b(yes|yeah|yep|yup|correct|that'?s right|that'?s me|that'?s the one|sure|ok|okay|fine|alright|all right|go ahead|go on|carry on|please do|i do|i am|i guess|affirmative)\b/i;
-const NO = /\b(no|nope|nah|not really|incorrect|that's wrong|i don't|i'm not|negative)\b/i;
+  /\b(yes|yeah|yep|yup|correct|right|that'?s right|that'?s me|that'?s the one|that'?s it|sure|ok|okay|fine|alright|all right|go ahead|go on|carry on|please do|i do|i am|i guess|affirmative|gotcha|spot on|perfect|exactly|absolutely|definitely|certainly|indeed|of course|you got it|mm-?hmm|mhm|aye|no worries|no problem)\b/i;
+// "No worries" and "no problem" are agreement, and reading the leading "no"
+// at face value cleared the value the customer had just agreed to.
+const NO = /\b(no(?!\s+(worries|problem|probs))|nope|nah|not really|incorrect|that's wrong|i don't|i'm not|negative)\b/i;
 
 /** Returns null when the answer is neither, which routes to a re-ask. */
 export function normaliseBool(raw: string): boolean | null {
@@ -243,7 +245,10 @@ export function normaliseBool(raw: string): boolean | null {
   // "no, that's right" is agreement; check the stronger signal last.
   if (hasYes && !hasNo) return true;
   if (hasNo && !hasYes) return false;
-  if (hasYes && hasNo) return /\b(correct|that's right)\b/i.test(raw);
+  // Both in one breath - "yeah nah, that's the one", "no, spot on". Only an
+  // unambiguous agreement phrase settles it here; anything else returns null and
+  // is left to the model, which has the question in front of it.
+  if (hasYes && hasNo) return /\b(correct|that'?s right|that'?s the one|that'?s me|that'?s it|spot on|exactly)\b/i.test(raw) || null;
   return null;
 }
 

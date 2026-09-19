@@ -7,6 +7,7 @@ import type {
   GuardrailId,
   HandoffPacket,
   Lead,
+  TurnTiming,
 } from "./call.js";
 
 /**
@@ -25,8 +26,10 @@ type Base = { call_id: string; ts: number };
 
 export type CallEvent =
   /** Replayed first to a browser that connects mid-call, so it can build the board. */
-  | (Base & { type: "call.hello"; lead: Lead; journey_id: string; test_run: boolean; dial_target: string })
+  | (Base & { type: "call.hello"; lead: Lead; journey_id: string; test_run: boolean; dial_target: string; agent_brief?: string; /** True when no phone rang: sim transport or mocked voice. */ simulated?: boolean })
   | (Base & { type: "call.status"; status: CallStatus; outcome?: CallOutcome })
+  /** Twilio has the audio. Fired when its recording callback lands, which is usually after the call has ended. */
+  | (Base & { type: "call.recording"; available: boolean })
   | (Base & { type: "transcript.interim"; speaker: "agent" | "customer"; text: string })
   | (Base & {
       type: "transcript.final";
@@ -55,12 +58,27 @@ export type CallEvent =
     })
   | (Base & { type: "escalation.handoff"; reason: EscalationSignal; packet: HandoffPacket })
   | (Base & { type: "guardrail.trigger"; guardrail: GuardrailId; detail: string })
+  /**
+   * One request to the receiving system, with what was sent and what came back.
+   *
+   * Emitted per confirmed field as well as for the final POST, which is what the
+   * console's API logs pane renders: the operator sees the save happen rather than
+   * being told it did. `status: 0` means the request never reached a server, and
+   * `error` says why.
+   */
   | (Base & {
       type: "submit.result";
-      /** Incremental section PUTs land here too, so the drawer can show progress. */
+      /** The field id for an incremental save, `"final"` for the closing POST. */
       step: string;
       status: number;
       body: unknown;
+      method: "PUT" | "POST";
+      /** Path only - no hostname, so it stays readable on a projector. */
+      path: string;
+      request: unknown;
+      /** Round trip in milliseconds. */
+      ms: number;
+      error?: string;
     })
   /**
    * One turn's measured round trip, customer end-of-speech to agent audio.
@@ -68,6 +86,13 @@ export type CallEvent =
    * rehearsal checklist asserts a median under 800 ms on these.
    */
   | (Base & { type: "latency.turn"; ms: number; utterance: string; over_budget: boolean })
+  /**
+   * One turn's stage split, emitted once per agent reply.
+   *
+   * Flattened rather than nested so the audit mirror can be aggregated with
+   * `payload->>'first_audio_ms'` instead of a nested path.
+   */
+  | (Base & { type: "turn.timing" } & TurnTiming)
   /** Top-right counter: the 25% criterion, said out loud during the demo. */
   | (Base & {
       type: "metrics.update";

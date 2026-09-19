@@ -1,5 +1,5 @@
-import type { FieldValue, Lead } from "@recall/shared";
-import type { SpeakResult, Transport, TransportEndReason, UtteranceMeta } from "./transport.js";
+import type { FieldValue, Lead, TurnTiming } from "@recall/shared";
+import type { AudioMeta, SpeakResult, Transport, TransportEndReason, UtteranceMeta } from "./transport.js";
 import type { SignalReading } from "./escalation.js";
 
 /**
@@ -35,6 +35,7 @@ process.env.ANSWER_REACTION_MS = "0";
 process.env.SANDBOX_URL = "http://127.0.0.1:9";
 
 const { createEngine } = await import("./dialogue.js");
+const { TurnClock } = await import("./turn-clock.js");
 const { env } = await import("../env.js");
 const { loadJourney } = await import("../journey/index.js");
 const { log } = await import("../log.js");
@@ -73,8 +74,14 @@ class FakeLine implements Transport {
 
   async start(): Promise<void> {}
 
-  async speak(text: string, opts: { onFirstAudio?: () => void; interruptible?: boolean } = {}): Promise<SpeakResult> {
+  async speak(
+    text: string,
+    opts: { onFirstAudio?: () => void; onAudioMeta?: (meta: AudioMeta) => void; interruptible?: boolean } = {}
+  ): Promise<SpeakResult> {
     if (this.playing) this.overlaps++;
+    // The fake models a line that never touches ElevenLabs, the way the sim
+    // transport reads a pre-rendered line off disk.
+    opts.onAudioMeta?.({ cached: true, chars: text.length });
     opts.onFirstAudio?.();
     this.spoken.push(text);
     this.interruptible.push(opts.interruptible ?? true);
@@ -171,7 +178,7 @@ function lead(prefill: Record<string, FieldValue>): Lead {
   };
 }
 
-type Captured = { signals: SignalReading[]; handoff: string | null };
+type Captured = { signals: SignalReading[]; handoff: string | null; timings: TurnTiming[] };
 
 function hooks(captured: Captured) {
   return {
@@ -188,13 +195,14 @@ function hooks(captured: Captured) {
     onOutcome: () => {},
     onSubmit: () => {},
     persistField: () => {},
+    onTurnTiming: (timing: TurnTiming) => captured.timings.push(timing),
   };
 }
 
 type Deps = { extract?: Parameters<typeof createEngine>[0]["extract"] };
 
 function scenario(id: string, prefill: Record<string, FieldValue>, deps: Deps = {}) {
-  const captured: Captured = { signals: [], handoff: null };
+  const captured: Captured = { signals: [], handoff: null, timings: [] };
   const line = new FakeLine(id);
   const engine = createEngine({
     callId: id,
@@ -205,6 +213,21 @@ function scenario(id: string, prefill: Record<string, FieldValue>, deps: Deps = 
     ...deps,
   });
   return { line, engine, captured };
+}
+
+/**
+ * Says yes until the agent asks the question a scenario wants to start from.
+ *
+ * Counting turns instead pins the test to how many confirmations the journey
+ * happens to need today, so batching the prefilled ones broke eight scenarios
+ * that were not about batching at all.
+ */
+async function walkTo(line: FakeLine, want: RegExp, max = 16): Promise<boolean> {
+  for (let i = 0; i < max && !want.test(line.last()); i++) {
+    line.say("Yes.");
+    await line.settle();
+  }
+  return want.test(line.last());
 }
 
 let failures = 0;
@@ -220,6 +243,21 @@ const IDENTITY_AND_CONTACT = {
   account_holder: true,
   phone: "+61412345678",
   email: "priya.sharma@example.com",
+};
+
+/** A lead with no date of birth on it, so the date has to be given by voice. */
+const IDENTITY_WITHOUT_DOB = {
+  full_name: "Priya Sharma",
+  account_holder: true,
+  phone: "+61412345678",
+  email: "priya.sharma@example.com",
+};
+
+/** What the console leaves behind when the operator clears the number. */
+const IDENTITY_WITHOUT_PHONE = {
+  full_name: "Priya Sharma",
+  dob: "1989-03-07",
+  account_holder: true,
 };
 
 const THROUGH_SUPPLY = {
@@ -238,16 +276,12 @@ console.log("\n-- a field the lead already carries is confirmed, not asked");
   line.say("Yes.");
   await line.settle();
 
-  const name = line.last();
-  check("full name is read back for a yes, not asked open-ended", /Priya Sharma/.test(name) && /is that right/i.test(name), name);
+  const readBack = line.last();
+  check("what the lead carries is read back for a yes, not asked open-ended", /Priya Sharma/.test(readBack) && /is that right/i.test(readBack), readBack);
+  check("the date of birth is read back as a human date", /7th of March, 1989/.test(readBack) && !/what's your date of birth/i.test(readBack), readBack);
   line.say("Yes.");
   await line.settle();
   check("a yes confirms the prefilled name", engine.state.form.get("full_name")?.state === "confirmed");
-
-  const dob = line.last();
-  check("date of birth is read back as a human date", /7th of March, 1989/.test(dob) && !/what's your date of birth/i.test(dob), dob);
-  line.say("Yes.");
-  await line.settle();
 
   const holder = line.last();
   check("a closed prefilled field keeps its own yes/no question", /account holder/i.test(holder), holder);
@@ -265,7 +299,210 @@ console.log("\n-- a field the lead already carries is confirmed, not asked");
   await line.settle();
   const emailField = engine.state.form.get("email");
   check("the prefilled email is confirmed with its value", emailField?.state === "confirmed" && emailField.value === "priya.sharma@example.com");
-  check("the first empty field is asked normally", /street address/i.test(line.last()), line.last());
+  check("the first empty field is asked normally", /supply address/i.test(line.last()), line.last());
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- agreement the word list has never heard still counts");
+{
+  // "Right." only got into the yes list because a real call lost a date of
+  // birth to it, and the tail after it is endless: gotcha, spot on, bang on,
+  // you got it. Every miss costs the customer a turn on a question they
+  // already answered.
+  //
+  // The model is already called on exactly these turns - anything the code
+  // cannot resolve goes to the extractor - so it is asked the one question
+  // that matters rather than only being asked for field values.
+  const { line, engine, captured } = scenario("model-agreement", IDENTITY_AND_CONTACT, {
+    extract: async () => ({ accepted: [], rejected: [], intent: "answer" as const, agreement: "yes" as const, ms: 0, usage: null }),
+  });
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+  check("the walk reaches a read-back", /is that right/i.test(line.last()), line.last());
+
+  line.say("Bang on, mate.");
+  await line.settle();
+  check("a yes the list has never heard confirms the read-back", engine.state.form.get("full_name")?.state === "confirmed", JSON.stringify(engine.state.form.get("full_name")));
+  check("no handoff, no re-ask", captured.handoff === null && !/didn'?t catch/i.test(line.last()), `${String(captured.handoff)} ${line.last()}`);
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a whole sentence is not taken as a yes on the model's say-so");
+{
+  // The dangerous direction. A wrong "no" costs a turn; a wrong "yes" writes a
+  // value the customer may have been objecting to into an energy signup. So the
+  // model's yes only counts for a reply short enough to have been one.
+  const { line, engine } = scenario("model-agreement-long", IDENTITY_AND_CONTACT, {
+    extract: async () => ({ accepted: [], rejected: [], intent: "answer" as const, agreement: "yes" as const, ms: 0, usage: null }),
+  });
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+
+  line.say("Well that depends on which one you mean, I have moved house twice since then.");
+  await line.settle();
+  check("a long reply is not confirmed on the model's yes", engine.state.form.get("full_name")?.state !== "confirmed", JSON.stringify(engine.state.form.get("full_name")));
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a run of values the lead carries is confirmed in one line");
+{
+  // Every prefilled field used to cost its own read-back and its own yes, so a
+  // lead that arrived with five fields spent ten turns agreeing with itself
+  // before the first real question. They are confirmed as a run now: consecutive
+  // prefilled fields in one section, as long as the line actually speaks the
+  // value. A line that asks a question rather than reading a value back - "are
+  // you the account holder?", "is this number the best one to reach you on?" -
+  // keeps its own turn, because a yes to a list is not an answer to a question.
+  const { line, engine } = scenario("prefill-run", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  const before = line.spoken.length;
+  line.say("Yes.");
+  await line.settle();
+
+  const asked = line.spoken.slice(before);
+  const readBack = asked.filter((l) => /is that right/i.test(l));
+  check("the name and the date of birth are confirmed together", readBack.length === 1 && /Priya Sharma/.test(readBack[0] ?? "") && /7th of March, 1989/.test(readBack[0] ?? ""), JSON.stringify(readBack));
+
+  line.say("Yes.");
+  await line.settle();
+  const name = engine.state.form.get("full_name");
+  const dob = engine.state.form.get("dob");
+  check("one yes confirms both", name?.state === "confirmed" && dob?.state === "confirmed", `${String(name?.state)} ${String(dob?.state)}`);
+  check("a question keeps its own turn", /account holder/i.test(line.last()), line.last());
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a no that names one of them re-opens only that one");
+{
+  const { line, engine } = scenario("prefill-run-named-no", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+
+  line.say("No, the date of birth is wrong.");
+  await line.settle();
+
+  check("the name they did not object to stands", engine.state.form.get("full_name")?.state === "confirmed", JSON.stringify(engine.state.form.get("full_name")));
+  check("the one they named is re-opened", engine.state.form.get("dob")?.value === null, JSON.stringify(engine.state.form.get("dob")));
+  check("and asked for outright", /date of birth again/i.test(line.last()), line.last());
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a bare no to a list asks which part");
+{
+  // Which value was wrong is not knowable from "no" alone, and re-asking all of
+  // them makes the customer repeat what was already right.
+  const { line, engine } = scenario("prefill-run-bare-no", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+
+  line.say("No.");
+  await line.settle();
+  check("the list is not thrown away on a bare no", /which part/i.test(line.last()), line.last());
+
+  line.say("The date of birth.");
+  await line.settle();
+  check("naming it then re-opens that one", /date of birth again/i.test(line.last()), line.last());
+  check("and the rest stands", engine.state.form.get("full_name")?.state === "confirmed", JSON.stringify(engine.state.form.get("full_name")));
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a yes to a read-back outranks the model's guess at intent");
+{
+  // Found running the journey end to end against L-1043. Asked "is this number
+  // the best one to reach you on?" the customer said "Yes, that's the one." -
+  // one character past the length that decides a yes in code, so it went to the
+  // extractor, which returned no patch and intent=question. The engine read
+  // that as an advice question, deflected it and handed the call off: the
+  // customer had just said yes and got a colleague instead.
+  //
+  // The model's intent is already only trusted when the turn produced nothing.
+  // A yes or no to the line on the wire is not nothing.
+  const { line, engine, captured } = scenario("yes-outranks-intent", IDENTITY_AND_CONTACT, {
+    extract: async () => ({ accepted: [], rejected: [], intent: "question" as const, agreement: "unclear" as const, ms: 0, usage: null }),
+  });
+  await engine.begin();
+  line.say("Yes, now's fine.");
+  await line.settle();
+
+  check("the walk reaches the name read-back", /Priya Sharma/.test(line.last()), line.last());
+  line.say("Yes, that's the one.");
+  await line.settle();
+
+  check("the yes confirms the field", engine.state.form.get("full_name")?.state === "confirmed", JSON.stringify(engine.state.form.get("full_name")));
+  check("no handoff on a customer who said yes", captured.handoff === null, String(captured.handoff));
+  check("the journey moves on", /account holder/i.test(line.last()), line.last());
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a number the form does not hold is asked for, not confirmed at nothing");
+{
+  // Call bd82d644, 19 Sep 2026 05:58 UTC. Lead L-1043 carried no phone, so the
+  // form held nothing for that field - but its script is a confirmation ("Is
+  // this number the best one to reach you on?") and the engine asked it anyway.
+  // "Yeah." cannot fill a phone field, so the same question came round five
+  // seconds later, "Oh, yes, it is." could not fill it either, and the attempt
+  // after that handed the call off for CONFUSION. The customer had answered
+  // every time. A confirmation is only a question when there is something to
+  // confirm; with nothing, the field has to be asked for outright.
+  const { line, engine, captured } = scenario("phone-unknown", IDENTITY_WITHOUT_PHONE, {
+    extract: async ({ utterance }) => ({
+      accepted: /four one two/i.test(utterance)
+        ? [{ field: "phone", value: "+61412345678", confidence: 0.9, evidence: utterance, needsConfirm: true }]
+        : [],
+      rejected: [],
+      intent: "answer" as const, agreement: "unclear" as const,
+      ms: 0,
+      usage: null,
+    }),
+  });
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+  for (const _ of ["full_name", "dob", "account_holder"]) {
+    line.say("Yes.");
+    await line.settle();
+  }
+
+  const asked = line.last();
+  check("a phone the form does not hold is asked for outright", /what'?s the best number/i.test(asked), asked);
+  check("it is not put as a confirmation of nothing", !/is this number the best one/i.test(asked), asked);
+  // The account holder read-back was answered by the yes/no shortcut, which
+  // returns before the branch that clears this. Left pending, it ate the answer
+  // to this question as a late yes to that one.
+  check(
+    "the read-back before it is no longer pending",
+    engine.state.awaitingConfirm.length === 0,
+    JSON.stringify(engine.state.awaitingConfirm)
+  );
+
+  line.say("Oh four one two, three four five, six seven eight.");
+  await line.settle();
+  check("the number that is given is read back", /is that right/i.test(line.last()), line.last());
+  line.say("Yes.");
+  await line.settle();
+
+  const phone = engine.state.form.get("phone");
+  check("the number is captured", phone?.state === "confirmed" && phone.value === "+61412345678", JSON.stringify(phone));
+  check("no handoff on a customer who answered", captured.handoff === null, String(captured.handoff));
+  check("the journey moves on", /email/i.test(line.last()), line.last());
 
   await engine.finalise("incomplete");
 }
@@ -275,11 +512,7 @@ console.log("\n-- the answer to a re-ask is heard before CONFUSION is judged");
 {
   const { line, engine, captured } = scenario("second-chance", THROUGH_SUPPLY);
   await engine.begin();
-  for (let i = 0; i < 10; i++) {
-    line.say("Yes.");
-    await line.settle();
-  }
-  check("the walk reaches the fuel type question", /electricity, gas, or both/i.test(line.last()), line.last());
+  check("the walk reaches the fuel type question", await walkTo(line, /electricity, gas, or both/i), line.last());
 
   line.say("Uh, twenty minutes.", 0.3);
   await line.settle();
@@ -296,14 +529,112 @@ console.log("\n-- the answer to a re-ask is heard before CONFUSION is judged");
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n-- a read-back nobody answered is said again, not thrown away");
+{
+  // Call aead90d7. The customer corrected their date of birth, it was captured
+  // at 0.90 and read back correctly, and the reply to the read-back came back
+  // as "Thank you." at 0.50 - the recording has them saying "Right.". Neither a
+  // yes, a no nor a value, so the engine binned the date it had just been
+  // given, asked for it again, and charged the field an attempt for the
+  // privilege. One more miss and CONFUSION handed off a customer who had
+  // answered correctly the first time.
+  //
+  // Not hearing the answer to a read-back is not the same as being told the
+  // value is wrong. The read-back is said again, at no cost to the attempts,
+  // and only a second miss gives up on it.
+  const { line, engine, captured } = scenario("unheard-read-back", IDENTITY_WITHOUT_DOB, {
+    extract: async ({ utterance }) => ({
+      accepted: /september/i.test(utterance)
+        ? [{ field: "dob", value: "2002-09-01", confidence: 0.9, evidence: utterance, needsConfirm: true }]
+        : [],
+      rejected: [],
+      intent: "answer" as const, agreement: "unclear" as const,
+      ms: 0,
+      usage: null,
+    }),
+  });
+  await engine.begin();
+  check("the walk reaches the date of birth", await walkTo(line, /what's your date of birth/i), line.last());
+  line.say("Uh, no. Uh, it's 1st of September, 2002.");
+  await line.settle();
+  check("the correction is read back", /1st of September, 2002/.test(line.last()), line.last());
+
+  const attemptsBefore = engine.state.form.get("dob")?.attempts ?? 0;
+  line.say("Thank you.", 0.5);
+  await line.settle();
+
+  const dob = engine.state.form.get("dob");
+  check("the date the customer gave is kept", dob?.value === "2002-09-01", JSON.stringify(dob));
+  check("the read-back is said again rather than the field re-asked", /1st of September, 2002/.test(line.last()), line.last());
+  check("saying it again costs no attempt", dob?.attempts === attemptsBefore, `${String(dob?.attempts)} vs ${attemptsBefore}`);
+
+  line.say("Yes.");
+  await line.settle();
+  check("a yes to the second read-back confirms it", engine.state.form.get("dob")?.state === "confirmed", JSON.stringify(engine.state.form.get("dob")));
+  check("no handoff on a customer who answered", captured.handoff === null, String(captured.handoff));
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a read-back nobody answers twice gives up and asks again");
+{
+  const { line, engine } = scenario("unheard-read-back-twice", IDENTITY_WITHOUT_DOB, {
+    extract: async ({ utterance }) => ({
+      accepted: /september/i.test(utterance)
+        ? [{ field: "dob", value: "2002-09-01", confidence: 0.9, evidence: utterance, needsConfirm: true }]
+        : [],
+      rejected: [],
+      intent: "answer" as const, agreement: "unclear" as const,
+      ms: 0,
+      usage: null,
+    }),
+  });
+  await engine.begin();
+  await walkTo(line, /what's your date of birth/i);
+  line.say("Uh, no. Uh, it's 1st of September, 2002.");
+  await line.settle();
+
+  line.say("Thank you.", 0.5);
+  await line.settle();
+  line.say("Thank you.", 0.5);
+  await line.settle();
+
+  check("the second miss asks for the date again", /date of birth again/i.test(line.last()), line.last());
+  check("and that costs an attempt", engine.state.form.get("dob")?.attempts === 2, JSON.stringify(engine.state.form.get("dob")));
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a read-back answered with a whole sentence is not said again");
+{
+  // The mumbler. Read back an email, they answer "mmf shrrm at gmnl" - four
+  // words, no yes in them, nothing the extractor can take. That is not a
+  // misheard yes, it is a correction we failed to make out, and saying the
+  // read-back again would talk past them. The field gets asked outright in its
+  // own re-ask wording, which for email is the one that offers to spell it.
+  const { line, engine } = scenario("read-back-sentence", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+
+  check("the walk reaches the name read-back", /Priya Sharma/.test(line.last()), line.last());
+  line.say("mmf shrrm at gmnl", 0.38);
+  await line.settle();
+
+  check("the field is asked outright", /didn'?t catch that\. What was your full name/i.test(line.last()), line.last());
+  check("and that costs an attempt", engine.state.form.get("full_name")?.attempts === 2, JSON.stringify(engine.state.form.get("full_name")));
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
 console.log("\n-- two failed attempts still hand off");
 {
   const { line, engine, captured } = scenario("cap", THROUGH_SUPPLY);
   await engine.begin();
-  for (let i = 0; i < 10; i++) {
-    line.say("Yes.");
-    await line.settle();
-  }
+  await walkTo(line, /electricity, gas, or both/i);
   line.say("Uh, twenty minutes.", 0.3);
   await line.settle();
   line.say("I just send the MD.", 0.3);
@@ -322,10 +653,7 @@ console.log("\n-- asking for the question again is not a failed answer");
 {
   const { line, engine, captured } = scenario("repeat", THROUGH_SUPPLY);
   await engine.begin();
-  for (let i = 0; i < 10; i++) {
-    line.say("Yes.");
-    await line.settle();
-  }
+  await walkTo(line, /electricity, gas, or both/i);
   line.say("Uh, can you repeat it again?");
   await line.settle();
   check("the question is asked again, word for word", /^Is this for electricity, gas, or both\?$/.test(line.last()), line.last());
@@ -343,10 +671,7 @@ console.log("\n-- a sentence cut off by a pause waits for the rest of itself");
 {
   const { line, engine } = scenario("fragment", THROUGH_SUPPLY);
   await engine.begin();
-  for (let i = 0; i < 10; i++) {
-    line.say("Yes.");
-    await line.settle();
-  }
+  await walkTo(line, /electricity, gas, or both/i);
   const before = line.spoken.length;
   line.say("Uh, it's-", 0.6);
   await sleep(120);
@@ -362,10 +687,7 @@ console.log("\n-- a sentence cut off by a pause waits for the rest of itself");
 {
   const { line, engine } = scenario("fragment-alone", THROUGH_SUPPLY);
   await engine.begin();
-  for (let i = 0; i < 10; i++) {
-    line.say("Yes.");
-    await line.settle();
-  }
+  await walkTo(line, /electricity, gas, or both/i);
   line.say("Uh, it's-", 0.6);
   await sleep(600);
   await line.settle();
@@ -422,11 +744,7 @@ console.log("\n-- a second final while the first is being answered does not ask 
 {
   const { line, engine } = scenario("two-finals", THROUGH_SUPPLY);
   await engine.begin();
-  for (let i = 0; i < 10; i++) {
-    line.say("Yes.");
-    await line.settle();
-  }
-  check("the walk reaches the fuel type question", /electricity, gas, or both/i.test(line.last()), line.last());
+  check("the walk reaches the fuel type question", await walkTo(line, /electricity, gas, or both/i), line.last());
 
   line.speakMs = 40;
   const before = line.spoken.length;
@@ -450,10 +768,9 @@ console.log("\n-- an aside that cuts a question off gets the question asked agai
 {
   const { line, engine } = scenario("aside", THROUGH_SUPPLY);
   await engine.begin();
-  for (let i = 0; i < 9; i++) {
-    line.say("Yes.");
-    await line.settle();
-  }
+  // One short of the fuel type question, so the last yes is what puts it on the
+  // line and it can be cut off mid-flight.
+  await walkTo(line, /that's in NSW/i);
   line.speakMs = 40;
   line.say("Yes.");
   await until(() => /electricity, gas, or both/i.test(line.last()));
@@ -481,15 +798,11 @@ console.log("\n-- the filler and the reply behind it do not talk over each other
     extract: async () => {
       // Slow enough for the filler to be due, quick enough to land while it plays.
       await sleep(60);
-      return { accepted: [], rejected: [], intent: "unclear" as const, ms: 60 };
+      return { accepted: [], rejected: [], intent: "unclear" as const, agreement: "unclear" as const, ms: 60, usage: null };
     },
   });
   await engine.begin();
-  for (let i = 0; i < 10; i++) {
-    line.say("Yes.");
-    await line.settle();
-  }
-  check("the walk reaches the fuel type question", /electricity, gas, or both/i.test(line.last()), line.last());
+  check("the walk reaches the fuel type question", await walkTo(line, /electricity, gas, or both/i), line.last());
 
   // Now lines take time to play, and the filler is due before extraction lands.
   line.speakMs = 100;
@@ -507,6 +820,76 @@ console.log("\n-- the filler and the reply behind it do not talk over each other
   check("the reply follows it rather than landing on top of it", reaskAt > fillerAt, since.join(" | "));
   check("no line overlapped another", line.overlaps === 0, `${line.overlaps} overlap(s)`);
   await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a turn is measured from transcript in hand to audio on the wire");
+{
+  // The defect this whole thing exists for: latency.turn was wired for
+  // EchoEngine only, so the median the rehearsal checklist asserts on had never
+  // been recorded on a journey call.
+  const { line, engine, captured } = scenario("timing", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  // The opener is not a customer turn and is not measured. Start from empty
+  // anyway, so this case cannot pass on something begin() happened to leave.
+  captured.timings.length = 0;
+
+  line.say("my name is Priya Sharma");
+  await line.settle();
+
+  check("one timing event per reply", captured.timings.length === 1, `got ${captured.timings.length}`);
+  const t = captured.timings[0];
+  if (!t) {
+    check("a measured turn reports its stages", false, "no timing event to inspect");
+  } else {
+    check(
+      "the three tiling stages sum to first audio",
+      t.think_ms + t.wire_wait_ms + t.tts_ttfb_ms === t.first_audio_ms,
+      `${t.think_ms} + ${t.wire_wait_ms} + ${t.tts_ttfb_ms} vs ${t.first_audio_ms}`
+    );
+    // The fake line plays instantly, so every stage here is zero. Positive is
+    // not a claim this harness can make; negative is a real defect.
+    check(
+      "no stage is negative",
+      t.think_ms >= 0 && t.wire_wait_ms >= 0 && t.tts_ttfb_ms >= 0 && t.first_audio_ms >= 0,
+      `${t.think_ms} / ${t.wire_wait_ms} / ${t.tts_ttfb_ms} / ${t.first_audio_ms}`
+    );
+    check("a mocked model reports no token count", t.prompt_tokens === null && t.completion_tokens === null);
+    check("a sim line is not counted as live synthesis", t.kind === "cached_line", t.kind);
+  }
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a turn that never reached the wire reports nothing");
+{
+  // Driven against the clock directly rather than through the engine: the fake
+  // line stamps first audio the instant speak() is called, so there is no
+  // moment in a scenario at which a barge-in could land before it.
+  const cut = new TurnClock();
+  cut.markDecided();
+  cut.markWireFree();
+  check("a turn cut before any audio emits no timing", cut.finish() === null);
+
+  const whole = new TurnClock();
+  whole.markDecided();
+  whole.markWireFree();
+  whole.markFirstAudio();
+  const t = whole.finish();
+  check("a fully marked clock reports a timing", t !== null);
+  if (t) {
+    check(
+      "its stages tile the turn exactly",
+      t.think_ms + t.wire_wait_ms + t.tts_ttfb_ms === t.first_audio_ms,
+      `${t.think_ms} + ${t.wire_wait_ms} + ${t.tts_ttfb_ms} vs ${t.first_audio_ms}`
+    );
+    check(
+      "no stage is negative",
+      t.think_ms >= 0 && t.wire_wait_ms >= 0 && t.tts_ttfb_ms >= 0,
+      `${t.think_ms} / ${t.wire_wait_ms} / ${t.tts_ttfb_ms}`
+    );
+  }
 }
 
 console.log(failures ? `\n${failures} failure(s).` : "\nAll dialogue checks pass.");

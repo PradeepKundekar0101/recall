@@ -30,7 +30,13 @@ export function loadLeads(): Lead[] {
     phone: testNumber,
     prefill: {
       ...lead.prefill,
-      ...(lead.prefill.phone !== undefined ? { phone: testNumber } : {}),
+      // The number we are about to ring is known, whatever the fixture says, so
+      // the form starts holding it and the agent confirms it in one line. Two of
+      // the three fixtures carried no phone at all, and the field's script is a
+      // confirmation - so on those leads the agent asked "is this number the
+      // best one to reach you on?" about a number it did not have, could not
+      // take the customer's yes for an answer, and handed the call off.
+      phone: testNumber,
       // The plan the customer was already looking at when they dropped out. It
       // belongs in the prefill so the agent confirms it in one line ("you were
       // looking at X, shall I put you down for that?") rather than asking a

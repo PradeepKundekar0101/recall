@@ -3,10 +3,12 @@
 import { useState } from "react";
 
 /**
- * The payload the sandbox will receive, updating live.
+ * The payload the receiving system will get on the final submit, updating live.
  *
  * Collapsed by default so it does not steal the form's room, and it turns green on
- * a 2xx - the moment the working-outcome criterion is actually satisfied.
+ * a 2xx - the moment the working-outcome criterion is actually satisfied. The
+ * incremental saves are the API logs pane's job; this is the shape of the whole
+ * journey rather than the requests that built it.
  */
 export function PayloadDrawer({
   payload,
@@ -18,23 +20,17 @@ export function PayloadDrawer({
   const [open, setOpen] = useState(false);
   const final = submissions.find((s) => s.step === "final");
   const ok = final ? final.status >= 200 && final.status < 300 : null;
-  const saves = submissions.filter((s) => s.step !== "final").length;
 
   return (
     <div className="drawer">
       <button className="drawer-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        <span className="label">Sandbox payload</span>
+        <span className="label">Final payload</span>
         {final ? (
           <span className={`chip ${ok ? "chip-success" : "chip-error"}`}>
             {final.status} {ok ? "accepted" : "rejected"}
           </span>
         ) : (
           <span className="pane-meta">Not submitted</span>
-        )}
-        {saves > 0 && (
-          <span className="pane-meta">
-            {saves} section {saves === 1 ? "save" : "saves"}
-          </span>
         )}
         <span className="spacer" />
         <span className="drawer-toggle">{open ? "Hide" : "Show"}</span>

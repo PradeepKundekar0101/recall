@@ -13,7 +13,7 @@ import type { CallStatus } from "@recall/shared";
  * orb, small, marks every agent line in the transcript, so the thing talking on
  * the phone and the thing on screen are recognisably one thing.
  */
-export type OrbStatus = CallStatus | "idle";
+export type OrbStatus = CallStatus | "idle" | "lost";
 
 export function Orb({
   status,

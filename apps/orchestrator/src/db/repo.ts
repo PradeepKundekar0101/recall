@@ -15,6 +15,8 @@ export async function openCall(opts: {
   lead: Lead;
   journeyId: string;
   testRun: boolean;
+  /** False only when a phone actually rang: pstn transport with real voice. */
+  simulated: boolean;
 }): Promise<void> {
   const client = sb();
   if (!client) return;
@@ -25,6 +27,7 @@ export async function openCall(opts: {
     journey_id: opts.journeyId,
     status: "queued" satisfies CallStatus,
     test_run: opts.testRun,
+    simulated: opts.simulated,
   });
   if (error) log.warn(`repo.openCall: ${error.message}`);
 }
@@ -128,4 +131,95 @@ export async function recordSubmission(opts: {
     response: opts.response,
   });
   if (error) log.warn(`repo.recordSubmission: ${error.message}`);
+}
+
+/** A `calls` row, as the history list and the replay need it. */
+export type CallRow = {
+  id: string;
+  lead_id: string;
+  status: CallStatus;
+  outcome: CallOutcome | null;
+  handoff_reason: string | null;
+  started_at: string;
+  ended_at: string | null;
+  duration_s: number | null;
+  fields_hands_free: number | null;
+  fields_total: number | null;
+  recording_url: string | null;
+  test_run: boolean;
+  simulated: boolean;
+};
+
+const CALL_COLUMNS =
+  "id, lead_id, status, outcome, handoff_reason, started_at, ended_at, duration_s, fields_hands_free, fields_total, recording_url, test_run, simulated";
+
+/** Only a real id reaches Postgres: a uuid column rejects anything else with an error, not an empty result. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Newest first. */
+export async function listCalls(limit = 100): Promise<CallRow[]> {
+  const client = sb();
+  if (!client) return [];
+  const { data, error } = await client
+    .from("calls")
+    .select(CALL_COLUMNS)
+    .order("started_at", { ascending: false })
+    .limit(limit);
+  if (error) {
+    log.warn(`repo.listCalls: ${error.message}`);
+    return [];
+  }
+  return (data ?? []) as CallRow[];
+}
+
+export async function getCallRow(callId: string): Promise<CallRow | null> {
+  const client = sb();
+  if (!client || !UUID.test(callId)) return null;
+  const { data, error } = await client.from("calls").select(CALL_COLUMNS).eq("id", callId).maybeSingle();
+  if (error) {
+    log.warn(`repo.getCallRow: ${error.message}`);
+    return null;
+  }
+  return (data as CallRow | null) ?? null;
+}
+
+/**
+ * Everything the console was shown during a call, in order, rebuilt into the
+ * events it was shown as. This is what lets a call be opened again after the
+ * orchestrator that ran it is gone.
+ */
+export async function callEvents(callId: string): Promise<CallEvent[]> {
+  const client = sb();
+  if (!client || !UUID.test(callId)) return [];
+  const { data, error } = await client
+    .from("call_events")
+    .select("call_id, at, type, payload")
+    .eq("call_id", callId)
+    .order("at", { ascending: true })
+    .order("id", { ascending: true });
+  if (error) {
+    log.warn(`repo.callEvents: ${error.message}`);
+    return [];
+  }
+  return (data ?? []).map(
+    (row) =>
+      ({
+        ...(row.payload as Record<string, unknown>),
+        call_id: String(row.call_id),
+        ts: Date.parse(String(row.at)),
+        type: String(row.type),
+      }) as CallEvent
+  );
+}
+
+/**
+ * Twilio's recording callback usually lands after the call has ended, by which
+ * point closeCall has already written the row without it. So the url is written
+ * on its own, whenever it arrives.
+ */
+export async function setRecording(callId: string, url: string): Promise<void> {
+  const client = sb();
+  if (!client || !UUID.test(callId)) return;
+  const { error } = await client.from("calls").update({ recording_url: url }).eq("id", callId);
+  if (error) log.warn(`repo.setRecording: ${error.message}`);
 }

@@ -1,4 +1,4 @@
-import express from "express";
+import express, { Router } from "express";
 import { pathToFileURL } from "node:url";
 import { env } from "../env.js";
 import { log } from "../log.js";
@@ -6,11 +6,17 @@ import { log } from "../log.js";
 /**
  * A local stand-in for CIMET's journey sandbox.
  *
- * It exists so the working-outcome criterion does not depend on their endpoint
- * being reachable from the venue network. It mirrors the placeholder payload:
- * 422 with the missing-field list on failure, 201 with a journey_id on success.
- * The console shows the response either way, so a failed submit is visible rather
- * than silent.
+ * It exists because no sandbox or mocked API was provided, so the working-outcome
+ * criterion cannot depend on someone else's endpoint being reachable from the venue
+ * network. It is mounted inside the orchestrator at `/mock-crm` by default, which
+ * means one process to start instead of two - but the requests are ordinary HTTP
+ * with ordinary status codes, and `SANDBOX_URL` still decides where they go, so
+ * pointing at a real endpoint stays a config change.
+ *
+ * It mirrors the placeholder payload: 200 on an incremental field save, and on the
+ * final submit either 422 with the missing-field list or 201 with a journey_id. The
+ * console shows the request and the response either way, so a failed save is visible
+ * rather than silent.
  */
 
 const REQUIRED: Record<string, string[]> = {
@@ -20,33 +26,57 @@ const REQUIRED: Record<string, string[]> = {
   eligibility: ["concession", "life_support"],
 };
 
-type Journey = { lead_id: string; journey_id: string; steps: Record<string, unknown>; completed: boolean };
+type Journey = {
+  lead_id: string;
+  journey_id: string;
+  /** Field id to the last value saved for it, in the order the call confirmed them. */
+  fields: Record<string, unknown>;
+  completed: boolean;
+};
 
 const journeys = new Map<string, Journey>();
 
-export function createMockSandbox() {
-  const app = express();
-  app.use(express.json({ limit: "1mb" }));
+function journeyFor(leadId: string): Journey {
+  const existing = journeys.get(leadId);
+  if (existing) return existing;
+  const created: Journey = {
+    lead_id: leadId,
+    journey_id: `J-${leadId}-${Date.now().toString(36)}`,
+    fields: {},
+    completed: false,
+  };
+  journeys.set(leadId, created);
+  return created;
+}
 
-  app.get("/health", (_req, res) => res.json({ ok: true, journeys: journeys.size }));
+/** The routes themselves, so they can be mounted anywhere. */
+export function mockSandboxRouter(): Router {
+  const r = Router();
 
-  // Incremental step save. Partial by definition, so it does not validate.
-  app.put("/journeys/:leadId/steps/:step", (req, res) => {
-    const { leadId, step } = req.params;
-    const journey = journeys.get(leadId) ?? {
-      lead_id: leadId,
-      journey_id: `J-${leadId}-${Date.now().toString(36)}`,
-      steps: {},
-      completed: false,
-    };
-    journey.steps[step] = req.body?.data ?? {};
-    journeys.set(leadId, journey);
-    log.info(`mock sandbox: saved step "${step}" for ${leadId}`);
-    res.status(200).json({ journey_id: journey.journey_id, step, saved: true });
+  r.get("/health", (_req, res) => res.json({ ok: true, journeys: journeys.size }));
+
+  /**
+   * Incremental field save. Partial by definition, so it does not validate - it
+   * records the value, the confidence and where it came from, and reports how much
+   * of the journey it is now holding.
+   */
+  r.put("/journeys/:leadId/fields/:field", (req, res) => {
+    const { leadId, field } = req.params;
+    const journey = journeyFor(leadId);
+    journey.fields[field] = req.body?.value ?? null;
+
+    log.info(`mock CRM: saved "${field}" for ${leadId} (${Object.keys(journey.fields).length} held)`);
+    res.status(200).json({
+      journey_id: journey.journey_id,
+      field,
+      saved: true,
+      fields_held: Object.keys(journey.fields).length,
+      received_at: new Date().toISOString(),
+    });
   });
 
   // Final submit. This one validates.
-  app.post("/journeys", (req, res) => {
+  r.post("/journeys", (req, res) => {
     const payload = req.body ?? {};
     const missing: string[] = [];
 
@@ -54,7 +84,7 @@ export function createMockSandbox() {
       const block = (payload[section] ?? {}) as Record<string, unknown>;
       for (const field of fields) {
         const value = block[field];
-        // `false` is a valid answer to "do you hold a concession card", so only
+        // `false` is a valid answer to "are you the account holder", so only
         // null, undefined and empty string count as missing.
         if (value === null || value === undefined || value === "") missing.push(`${section}.${field}`);
       }
@@ -71,30 +101,36 @@ export function createMockSandbox() {
     }
 
     if (missing.length) {
-      log.warn(`mock sandbox: rejected ${payload.lead_id} - ${missing.length} missing`);
+      log.warn(`mock CRM: rejected ${payload.lead_id} - ${missing.length} missing`);
       return res.status(422).json({ error: "missing_required_fields", missing });
     }
 
     const leadId = String(payload.lead_id);
-    const existing = journeys.get(leadId);
-    const journeyId = existing?.journey_id ?? `J-${leadId}-${Date.now().toString(36)}`;
-    journeys.set(leadId, {
-      lead_id: leadId,
-      journey_id: journeyId,
-      steps: existing?.steps ?? {},
-      completed: true,
-    });
+    const journey = journeyFor(leadId);
+    journey.completed = true;
 
-    log.info(`mock sandbox: accepted ${leadId} -> ${journeyId}`);
-    res.status(201).json({ journey_id: journeyId, status: "completed" });
+    log.info(`mock CRM: accepted ${leadId} -> ${journey.journey_id}`);
+    res.status(201).json({
+      journey_id: journey.journey_id,
+      status: "completed",
+      fields_held: Object.keys(journey.fields).length,
+    });
   });
 
-  app.get("/journeys/:leadId", (req, res) => {
+  r.get("/journeys/:leadId", (req, res) => {
     const journey = journeys.get(req.params.leadId);
     if (!journey) return res.status(404).json({ error: "not_found" });
     res.json(journey);
   });
 
+  return r;
+}
+
+/** Standalone app, for running the mock on its own port. */
+export function createMockSandbox() {
+  const app = express();
+  app.use(express.json({ limit: "1mb" }));
+  app.use(mockSandboxRouter());
   return app;
 }
 

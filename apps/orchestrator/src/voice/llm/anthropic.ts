@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { env } from "../../env.js";
 import { SentenceSplitter, type ChatMessage, type LlmProviderApi, type ToolSchema } from "./types.js";
+import { readAnthropicUsage } from "./usage.js";
 
 /**
  * Claude Haiku 4.5.
@@ -42,7 +43,7 @@ export const anthropicProvider: LlmProviderApi = {
       (b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === opts.tool.name
     );
     if (!block) throw new Error(`anthropic returned no ${opts.tool.name} tool call`);
-    return block.input as T;
+    return { value: block.input as T, usage: readAnthropicUsage(response, opts.model) };
   },
 
   async *streamSentences(opts: {
