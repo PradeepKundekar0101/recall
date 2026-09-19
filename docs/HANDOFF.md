@@ -1,9 +1,9 @@
 # RECALL - session handoff
 
 Written 19 Sep 2026, after the first successful live phone call.
-Updated the same night, after the first and second journey calls over a real phone, and again the next morning after the third and fourth, and again after the fifth.
-Next task: **run the Energy journey over a real call again, and let the handoff ring the second handset.**
-The fifth call is the one to read first if the handoff is what you are working on: it reached the transfer, and the transfer cut the customer off.
+Updated the same night, after the first and second journey calls over a real phone, and again the next morning after the third and fourth, and again after the fifth, sixth and seventh.
+Next task: **run the Energy journey over a real call again and get a clean submit; the handoff itself now works.**
+The sixth call is the one to read first: the warm transfer rang the second handset, the human answered, and the two of them talked for 87 seconds.
 
 ## Where things stand
 
@@ -15,13 +15,14 @@ The full journey works in simulation against live models: a cooperative call sub
 That was 13 of 15 until a customer restating a prefilled value stopped counting as hands-free; the field came from the web journey, so it should not have.
 All ten eval personas pass (gate is 9/10), though the suite is not fully deterministic - see Known flakiness.
 
-**The journey has now been run over a real phone five times.**
+**The journey has now been run over a real phone seven times.**
 The first call (3f927a21, 01:55 IST) failed on a line full of static and handed off with nothing captured.
 The second (35fbec5a, 02:47 IST) ran cleanly through name, date of birth, account holder, phone and a corrected email, then fell over at the street address and "got cut" when the handoff fired.
 The third and fourth (07:50 and 07:52 IST) were both cut about eight seconds in by Twilio's answering-machine detection, mid-answer.
 The fifth (bd82d644, 11:27 IST) got as far as the warm handoff and then cut the customer off one second into it, after asking the same question twice and escalating on a customer who had answered.
-All five are dissected below, and every defect they exposed is fixed and checked.
-The warm transfer has still never rung the second handset; that is the next thing to see.
+The sixth (11af167e, 12:07 IST) handed off and **the second handset rang, was answered, and stayed bridged to the customer for 87 seconds** - the first time that has ever happened.
+The seventh (aead90d7, 12:17 IST) escalated on a customer who had confirmed their date of birth, and then dropped them because the human did not pick up.
+All seven are dissected below, and every defect they exposed is fixed and checked.
 
 ## Run it
 
@@ -348,6 +349,54 @@ The intent to transfer is now recorded before the redirect goes out and reset on
 This is fixed against Twilio's own record of what went wrong, not against a guess, but nobody has yet heard the whisper on the second handset.
 That rehearsal is still the next thing to do.
 
+## The sixth and seventh journey calls
+
+**The sixth (`11af167e`, 06:37 UTC) is the one worth celebrating.**
+It escalated for CONFUSION like the fifth, and then the handoff did exactly what it was built to do.
+Twilio's log: the customer's leg `CA2ac10229` ran 06:37:35 to 06:40:24, and the handoff handset's leg `CA5f3bce98` ran 06:38:57 to 06:40:24 - **87 seconds, status completed**.
+The human answered, the whisper played to them alone, and the two legs ended together when the call was over.
+The oldest item on this list is closed: the warm transfer works on a real phone, with a real second handset.
+
+**The seventh (`aead90d7`, 06:47 UTC) escalated a customer who had confirmed, and then dropped them.**
+What the customer heard, from 48:16:
+
+```
+Priya    Uh, no. Uh, it's 1st of September, 2002.      (0.90, captured correctly)
+Agent    So that's the 1st of September, 2002?
+Priya    "Thank you."                                   (0.50 - the recording has "Right.")
+Agent    Sorry, could you give me your date of birth again?
+Priya    (starting to answer again)
+Agent    I'm going to get a colleague to help you with this...
+                                                        (line dead nine seconds later)
+```
+
+The recording settles what was actually said.
+Batch Scribe over `RE274c76eb`, diarised, has the customer saying **"Right."** at 49.3 s and, after the re-ask, "Uh-" and then "It's first of September, two thousand and two" at 56.5 s - which arrived as the handoff was already firing.
+They answered correctly, confirmed correctly, and were handed to a human for it.
+
+Two defects, both fixed.
+
+**"Right." was not agreement.**
+The yes pattern carried "alright", "all right" and "that's right", and "ok", "okay", "fine" and "sure" beside them, but not bare "right".
+It does now.
+Note what that costs to rely on, though: the live transcript rendered the word as "Thank you." at 0.50 confidence, so recognising more words is not a substitute for surviving a bad one - which is the second defect.
+
+**A read-back nobody answered threw the value away.**
+Neither a yes, a no, nor a value did exactly what a "no" does: clear the field and ask for it again, charging an attempt.
+So a date captured at 0.90 was binned over one garbled reply to the confirmation, and the attempt that cost put the field one miss from CONFUSION.
+A read-back is now said again once, behind "Sorry, I didn't catch that.", at no cost to the attempts; only a second miss gives up on the value and asks outright.
+A "no" still clears it immediately, because a no is an answer.
+This only applies to a reply too short to have been anything but a yes or a no - three words, the same boundary the transport uses for turn-taking.
+Four words at a read-back is a correction we failed to make out, and the mumbler persona in `pnpm eval` is what holds that line: it answers an email read-back with "mmf shrrm at gmnl" and must still reach a human.
+Making the engine more patient broke that persona before the word count went in, which is exactly what it is there for.
+
+**Then the human did not pick up, and the customer was dropped in silence.**
+The child leg `CA414c1085` shows `no-answer` after 1 second, and the customer's leg completed in the same second.
+This is not the fifth call's bug coming back: Twilio's event log for `CA0d7dea` has only two updates from us, the original create and the `<Dial>` redirect, and no `status=completed` at all.
+The `<Dial>` is simply the last verb in the document, so when it ended the call fell off the end of its TwiML and Twilio hung it up.
+From the customer's chair: "I'm going to get a colleague to help you", a pause, and then nothing.
+Unfixed, and the one known hole left in the handoff - see Pending.
+
 ## What to watch on the next journey call
 
 - Does the consent gate fire before any field is asked, and is the disclosure audible at the top.
@@ -369,7 +418,8 @@ That rehearsal is still the next thing to do.
 **Blocking a full demo**
 
 - The journey has run over a real phone once and failed on the line. It has not yet completed over a real phone; everything below assumes that happens first.
-- Warm handoff `<Dial>` transfer has still never rung the second handset live. It was refused by guardrail 1 on the second call, and on the fifth it went through and then hung the customer up a second later. All three defects are fixed and covered by `pnpm transport:check`, but nobody has yet heard the whisper, and the fix for the fifth call has only been proved against a fake Twilio.
+- ~~Warm handoff `<Dial>` transfer has never rung the second handset live.~~ Done on the sixth call: the handset rang, the human answered, the whisper played, and the bridge held for 87 seconds.
+- **Nothing happens for the customer when the human does not answer.** The `<Dial>` is the last verb in the document, so when the seventh call's handoff went unanswered the Dial ended after a second and Twilio hung the customer up in silence. They had just been told a colleague was coming. This is the one known hole left in the handoff and it needs an `action` URL on the `<Dial>` with something to say.
 - The operator console has never been watched during a real call.
 
 **Waiting on CIMET**
