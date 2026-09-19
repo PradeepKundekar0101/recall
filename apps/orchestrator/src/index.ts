@@ -93,6 +93,25 @@ try {
 
 const leads = loadLeads();
 
+// A second orchestrator used to die on the port bind without saying why, and
+// `tsx watch` kept its watcher alive afterwards. Those watchers restart on any
+// source edit and race for :8080, so the process that answers the next dial can
+// be one started hours earlier from a shell carrying TRANSPORT=sim - which
+// outranks .env - and the console then runs the simulator while the operator
+// waits for a phone to ring. Seventeen of them had accumulated. Say what
+// happened and take the watcher down with us.
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    log.error(
+      `port ${env.port} is already in use - another orchestrator is running. ` +
+        `Stop it first: pkill -f "tsx watch src/index.ts"`
+    );
+  } else {
+    log.error(err.message);
+  }
+  process.exit(1);
+});
+
 server.listen(env.port, () => {
   log.info(`RECALL orchestrator on :${env.port}`);
   for (const line of bootReport()) log.info(`  ${line}`);

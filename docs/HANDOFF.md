@@ -103,6 +103,13 @@ Every earlier `pnpm dev:api` left its watcher running after its port bind failed
 They all restart on any source edit and race for :8080, so the process serving the next call can be one started hours ago from a different shell, with that shell's environment.
 Before a test: `pkill -f "tsx watch src/index.ts"`, start one, and confirm with `curl localhost:8080/health` that `boot` shows the mode and model you expect.
 
+**That pileup is what makes the console dial nothing, and the console used to hide it.**
+`TRANSPORT` and `MOCK_VOICE` exported in a shell outrank `.env` by design, so a watcher started once from a shell carrying `TRANSPORT=sim MOCK_VOICE=1` serves every later dial from the simulator no matter what `.env` says.
+Seventeen orchestrators were alive at once and two of them held exactly that; whichever owned :8080 decided whether the phone rang.
+The symptom from the operator's chair is a full, convincing journey transcript appearing the instant Dial is pressed while no handset rings.
+Two things give it away: every customer turn scores exactly 95%, which is `SimTransport`'s default confidence, and the whole conversation - opener, consent, a re-ask and a six-second silence nudge - spans six seconds of wall clock, which no spoken call can do.
+`POST /calls` has always returned `simulated: true` for this, but the console threw the field away; it now shows `SIMULATED - NO PHONE DIALLED` in place of the TEST RUN chip and says so in the notice bar.
+
 **The TTS model has to be one the voice is fine-tuned on.**
 The Australian brand voice is a professional clone whose `eleven_flash_v2_5` fine-tune is `failed` on ElevenLabs' side, so v2.5 rendered it flat and synthetic on the first journey call.
 `GET /v1/voices/{id}` shows `fine_tuning.state` per model; `TTS_MODEL` is now `eleven_flash_v2`, which is fine-tuned and within 30 ms of v2.5 to first audio.

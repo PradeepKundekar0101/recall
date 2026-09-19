@@ -252,6 +252,18 @@ html, body {
   );
 }
 
+/* A simulated call is a stronger warning than a test run: the test run is going
+   to ring a phone, this one never will. Same chip, alarm palette. */
+.testrun-sim {
+  border-color: var(--alarm);
+  color: var(--alarm);
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent 0 6px,
+    rgba(255, 92, 92, 0.12) 6px 12px
+  );
+}
+
 .status-dot {
   display: inline-block;
   width: 7px; height: 7px;

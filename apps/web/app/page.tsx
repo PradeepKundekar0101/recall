@@ -19,6 +19,8 @@ export default function OperatorConsole() {
   const [selectedField, setSelectedField] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  /** Whether the call on screen actually rang a phone. Null before the first dial. */
+  const [simulated, setSimulated] = useState<boolean | null>(null);
 
   const call = useCallStream(callId, journey);
 
@@ -47,14 +49,24 @@ export default function OperatorConsole() {
   async function dial() {
     if (!lead) return;
     setNotice(null);
-    const { status, data } = await postJson<{ call_id?: string; error?: string }>("/calls", {
-      lead_id: lead.id,
-    });
+    const { status, data } = await postJson<{
+      call_id?: string;
+      error?: string;
+      simulated?: boolean;
+      note?: string;
+    }>("/calls", { lead_id: lead.id });
     if (status === 403 || status === 404 || status === 501) {
       setNotice(data.error ?? `Dial refused (${status}).`);
       return;
     }
     if (data.call_id) {
+      // A simulated dial answers 201 and streams a whole scripted conversation
+      // while no phone ever rings. On screen that is indistinguishable from a
+      // real call, so the orchestrator spells the fact out and the console has
+      // to say so - otherwise the operator is watching a fake call believing
+      // the handset is about to ring.
+      setSimulated(data.simulated ?? false);
+      if (data.simulated) setNotice(data.note ?? "No phone was dialled - this call is simulated.");
       setCallId(data.call_id);
       setElapsed(0);
     }
@@ -137,7 +149,15 @@ export default function OperatorConsole() {
           Dial
         </button>
 
-        <span className="testrun">TEST RUN · {lead?.phone ?? "no number"}</span>
+        {/* The chip already exists to make a guardrail visible. "Nothing was
+            dialled" is the same class of fact and outranks it, so it takes the
+            chip over for the duration of the call rather than adding a second
+            thing to read. */}
+        {simulated ? (
+          <span className="testrun testrun-sim">SIMULATED · NO PHONE DIALLED</span>
+        ) : (
+          <span className="testrun">TEST RUN · {lead?.phone ?? "no number"}</span>
+        )}
       </header>
 
       {notice && (

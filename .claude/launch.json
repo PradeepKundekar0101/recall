@@ -6,6 +6,12 @@
       "runtimeExecutable": "corepack",
       "runtimeArgs": ["pnpm", "dev:web"],
       "port": 3000
+    },
+    {
+      "name": "orchestrator",
+      "runtimeExecutable": "corepack",
+      "runtimeArgs": ["pnpm", "dev:api"],
+      "port": 8080
     }
   ]
 }
