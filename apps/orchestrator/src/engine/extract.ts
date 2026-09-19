@@ -1,5 +1,5 @@
 import type { FieldValue, Intent, Journey, JourneyField } from "@recall/shared";
-import { toolCall, type ToolSchema } from "../voice/llm.js";
+import { toolCall, type ToolSchema, type TokenUsage } from "../voice/llm.js";
 import { normalise, stateFromPostcode } from "./normalise.js";
 import type { Form } from "./fact-bus.js";
 
@@ -166,10 +166,16 @@ export async function extract(opts: {
   utterance: string;
   asking: JourneyField | null;
   sttConfidence: number | null;
-}): Promise<{ accepted: AcceptedPatch[]; rejected: RejectedPatch[]; intent: Intent; ms: number }> {
+}): Promise<{
+  accepted: AcceptedPatch[];
+  rejected: RejectedPatch[];
+  intent: Intent;
+  ms: number;
+  usage: TokenUsage | null;
+}> {
   const { journey, utterance, asking } = opts;
 
-  const { value, ms } = await toolCall<ExtractionResult>({
+  const { value, ms, usage } = await toolCall<ExtractionResult>({
     system: systemPrompt(journey, asking),
     user: utterance,
     tool: extractionTool(journey),
@@ -243,7 +249,7 @@ export async function extract(opts: {
   // question they will find strange.
   inferState(journey, accepted);
 
-  return { accepted, rejected, intent: value.intent ?? "unclear", ms };
+  return { accepted, rejected, intent: value.intent ?? "unclear", ms, usage };
 }
 
 /**

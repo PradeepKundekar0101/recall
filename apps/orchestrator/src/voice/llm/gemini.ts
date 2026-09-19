@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { env } from "../../env.js";
 import { SentenceSplitter, type ChatMessage, type LlmProviderApi, type ToolSchema } from "./types.js";
+import { readGeminiUsage } from "./usage.js";
 
 /**
  * Gemini 3.8 Flash. Wired, but deliberately never selected implicitly.
@@ -51,7 +52,7 @@ export const geminiProvider: LlmProviderApi = {
 
     const call = response.functionCalls?.[0];
     if (!call?.args) throw new Error(`gemini returned no ${opts.tool.name} tool call`);
-    return call.args as T;
+    return { value: call.args as T, usage: readGeminiUsage(response, opts.model) };
   },
 
   async *streamSentences(opts: {

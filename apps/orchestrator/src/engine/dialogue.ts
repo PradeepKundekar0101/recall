@@ -359,7 +359,7 @@ export class DialogueEngine {
 
     const [extraction, readings] = await Promise.all([
       resolvableInCode
-        ? Promise.resolve({ accepted: [], rejected: [], intent: "answer" as const, ms: 0 })
+        ? Promise.resolve({ accepted: [], rejected: [], intent: "answer" as const, ms: 0, usage: null })
         : this.extractor({
             journey: this.state.journey,
             form: this.state.form,

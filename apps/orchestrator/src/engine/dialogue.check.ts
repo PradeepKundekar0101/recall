@@ -379,7 +379,7 @@ console.log("\n-- a yes to a read-back outranks the model's guess at intent");
   // The model's intent is already only trusted when the turn produced nothing.
   // A yes or no to the line on the wire is not nothing.
   const { line, engine, captured } = scenario("yes-outranks-intent", IDENTITY_AND_CONTACT, {
-    extract: async () => ({ accepted: [], rejected: [], intent: "question" as const, ms: 0 }),
+    extract: async () => ({ accepted: [], rejected: [], intent: "question" as const, ms: 0, usage: null }),
   });
   await engine.begin();
   line.say("Yes, now's fine.");
@@ -415,6 +415,7 @@ console.log("\n-- a number the form does not hold is asked for, not confirmed at
       rejected: [],
       intent: "answer" as const,
       ms: 0,
+      usage: null,
     }),
   });
   await engine.begin();
@@ -494,6 +495,7 @@ console.log("\n-- a read-back nobody answered is said again, not thrown away");
       rejected: [],
       intent: "answer" as const,
       ms: 0,
+      usage: null,
     }),
   });
   await engine.begin();
@@ -530,6 +532,7 @@ console.log("\n-- a read-back nobody answers twice gives up and asks again");
       rejected: [],
       intent: "answer" as const,
       ms: 0,
+      usage: null,
     }),
   });
   await engine.begin();
@@ -740,7 +743,7 @@ console.log("\n-- the filler and the reply behind it do not talk over each other
     extract: async () => {
       // Slow enough for the filler to be due, quick enough to land while it plays.
       await sleep(60);
-      return { accepted: [], rejected: [], intent: "unclear" as const, ms: 60 };
+      return { accepted: [], rejected: [], intent: "unclear" as const, ms: 60, usage: null };
     },
   });
   await engine.begin();

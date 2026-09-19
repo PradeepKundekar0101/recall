@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { env } from "../../env.js";
 import { SentenceSplitter, type ChatMessage, type LlmProviderApi, type ToolSchema } from "./types.js";
+import { readOpenAiUsage } from "./usage.js";
 
 /**
  * The OpenAI-compatible providers: OpenAI itself and OpenRouter.
@@ -70,11 +71,13 @@ function makeProvider(config: CompatConfig): LlmProviderApi {
       }
       // Always parse; never string-match a serialised argument blob. Without
       // strict tools this can be malformed, so the throw is the useful outcome.
+      let value: T;
       try {
-        return JSON.parse(call.function.arguments) as T;
+        value = JSON.parse(call.function.arguments) as T;
       } catch {
         throw new Error(`${config.id} returned unparseable arguments for ${opts.tool.name}`);
       }
+      return { value, usage: readOpenAiUsage(response, opts.model) };
     },
 
     async *streamSentences(opts: {

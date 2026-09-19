@@ -19,6 +19,7 @@
     "normalise:check": "tsx src/engine/normalise.check.ts",
     "dialogue:check": "tsx src/engine/dialogue.check.ts",
     "tts:check": "tsx src/voice/tts.check.ts",
+    "usage:check": "tsx src/voice/llm/usage.check.ts",
     "transport:check": "tsx src/transports/twilio.check.ts",
     "setup:check": "tsx src/leads/setup.check.ts"
   },

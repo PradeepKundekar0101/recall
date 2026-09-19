@@ -3,9 +3,9 @@ import { log } from "../log.js";
 import { anthropicProvider } from "./llm/anthropic.js";
 import { openaiProvider, openrouterProvider } from "./llm/openai.js";
 import { geminiProvider } from "./llm/gemini.js";
-import type { ChatMessage, LlmProviderApi, ToolSchema } from "./llm/types.js";
+import type { ChatMessage, LlmProviderApi, ToolSchema, TokenUsage } from "./llm/types.js";
 
-export type { ChatMessage, ToolSchema } from "./llm/types.js";
+export type { ChatMessage, ToolSchema, TokenUsage } from "./llm/types.js";
 export { SentenceSplitter } from "./llm/types.js";
 
 /**
@@ -53,12 +53,14 @@ export type ToolCallOptions<T> = {
   maxTokens?: number;
 };
 
-export async function toolCall<T>(opts: ToolCallOptions<T>): Promise<{ value: T; ms: number }> {
-  if (env.mockVoice) return { value: opts.mock, ms: 0 };
+export async function toolCall<T>(
+  opts: ToolCallOptions<T>
+): Promise<{ value: T; ms: number; usage: TokenUsage | null }> {
+  if (env.mockVoice) return { value: opts.mock, ms: 0, usage: null };
 
   const started = Date.now();
   try {
-    const value = await provider().toolCall<T>({
+    const { value, usage } = await provider().toolCall<T>({
       system: opts.system,
       user: opts.user,
       tool: opts.tool,
@@ -68,7 +70,7 @@ export async function toolCall<T>(opts: ToolCallOptions<T>): Promise<{ value: T;
     });
     const ms = Date.now() - started;
     turnLatency.push(ms);
-    return { value, ms };
+    return { value, ms, usage };
   } catch (err) {
     log.error(`llm(${env.llmProvider}): ${err instanceof Error ? err.message : String(err)}`);
     throw err;
