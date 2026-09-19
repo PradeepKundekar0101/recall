@@ -275,12 +275,15 @@ export class TwilioTransport implements Transport {
           break;
         }
         case "stop":
-          this.end("hangup");
+          this.end(this.transferred ? "transferred" : "hangup");
           break;
       }
     });
 
-    ws.on("close", () => this.end("hangup"));
+    // A stream that ends after a transfer is Twilio taking the wire back, not
+    // the customer hanging up. Reading it as a hangup finalised the call as
+    // `disconnected` and completed the leg that was ringing the human.
+    ws.on("close", () => this.end(this.transferred ? "transferred" : "hangup"));
     ws.on("error", (err) => {
       log.call(this.id, `media socket error: ${err.message}`);
       this.end("failed");
@@ -552,16 +555,37 @@ export class TwilioTransport implements Transport {
     assertHandoffNumber(toNumber, this.opts.lead.phone);
 
     this.clearPlayback();
-    // The whisper is played to the human only: Twilio fetches the <Number url>
-    // when they answer, and that TwiML never reaches the customer's leg.
-    await this.api()
-      .calls(this.twilioCallSid)
-      .update({
-        twiml: `<Response><Dial answerOnBridge="true"><Number url="${env.publicBaseUrl}/twilio/whisper?text=${encodeURIComponent(whisper)}">${toNumber}</Number></Dial></Response>`,
-      });
+
+    // Marked before the redirect goes out, not after.
+    //
+    // Redirecting the call ends the <Connect><Stream> it is running, and Twilio
+    // tears the media stream down while the update is still in flight. Setting
+    // this afterwards left a window of a few tens of milliseconds in which that
+    // teardown arrived as an ordinary `hangup`: the engine finalised the call as
+    // `disconnected` and finalise() called hangup(), which completed the very
+    // leg that was ringing the human. On call bd82d644 the redirect went out at
+    // 05:58:51 and our own status=completed followed at 05:58:52; the handoff
+    // handset's leg died at no-answer after 0 seconds, and the customer heard
+    // the bridging line and then nothing. The window is not one to make
+    // smaller - the intent to transfer is what matters, so it is recorded
+    // first.
+    this.transferred = true;
+    try {
+      // The whisper is played to the human only: Twilio fetches the <Number url>
+      // when they answer, and that TwiML never reaches the customer's leg.
+      await this.api()
+        .calls(this.twilioCallSid)
+        .update({
+          twiml: `<Response><Dial answerOnBridge="true"><Number url="${env.publicBaseUrl}/twilio/whisper?text=${encodeURIComponent(whisper)}">${toNumber}</Number></Dial></Response>`,
+        });
+    } catch (err) {
+      // Nobody was dialled, so the call is still ours and the documented
+      // fallback needs to be able to hang it up.
+      this.transferred = false;
+      throw err;
+    }
 
     log.call(this.id, `transferred to ${toNumber} - whisper: ${whisper}`);
-    this.transferred = true;
     this.end("transferred");
   }
 
@@ -649,10 +673,16 @@ export class TwilioTransport implements Transport {
     if (this.dead) return;
     this.dead = true;
     this.stt?.close();
-    try {
-      this.ws?.close();
-    } catch {
-      /* already closed */
+    // Closing our end of a <Connect><Stream> is itself a way to end the call:
+    // the verb finishes and the call falls off the end of its TwiML. Once the
+    // call has been handed over, the wire belongs to Twilio's <Dial> and the
+    // teardown is theirs to do.
+    if (!this.transferred) {
+      try {
+        this.ws?.close();
+      } catch {
+        /* already closed */
+      }
     }
     log.call(
       this.id,

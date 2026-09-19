@@ -95,10 +95,14 @@ type Update = { sid: string; twiml?: string; status?: string };
 function fakeTwilio() {
   const updates: Update[] = [];
   let created: { twiml?: string; to?: string } | null = null;
+  /** Lets a scenario make an update do to the call what the real Twilio would. */
+  const hooks: { onUpdate?: (update: Update) => void } = {};
   const calls = Object.assign(
     (sid: string) => ({
       update: async (params: Omit<Update, "sid">) => {
-        updates.push({ sid, ...params });
+        const update = { sid, ...params };
+        updates.push(update);
+        hooks.onUpdate?.(update);
         return {};
       },
     }),
@@ -109,7 +113,12 @@ function fakeTwilio() {
       },
     }
   );
-  return { client: { calls } as unknown as ConstructorParameters<typeof TwilioTransport>[0]["client"], updates, created: () => created };
+  return {
+    client: { calls } as unknown as ConstructorParameters<typeof TwilioTransport>[0]["client"],
+    updates,
+    created: () => created,
+    hooks,
+  };
 }
 
 const journey = loadJourney();
@@ -159,6 +168,43 @@ console.log("\n-- warm transfer");
   const before = twilio.updates.length;
   await transport.hangup();
   check("hangup after a transfer leaves the call alone", !twilio.updates.slice(before).some((u) => u.status === "completed"), JSON.stringify(twilio.updates.slice(before)));
+}
+
+console.log("\n-- the redirect tears the media stream down, and that is not a hangup");
+{
+  // The fifth journey call, bd82d644, 19 Sep 05:58 UTC. Twilio's own log has
+  // the whole thing: the <Dial> redirect at 05:58:51, our own status=completed
+  // on the customer's leg at 05:58:52, and the handoff handset's leg dead at
+  // no-answer after 0 seconds. The customer heard the bridging line and then
+  // nothing.
+  //
+  // Redirecting a call ends the <Connect><Stream> it was running, so Twilio
+  // tears the media stream down *while the update is still in flight* - before
+  // transfer() had marked the call as handed over. The close came back as
+  // `hangup`, the engine finalised it as `disconnected`, and finalise() called
+  // hangup(), which completed the very call that was ringing the human. The
+  // recorded outcome was `disconnected`, not `handoff`, which is what proves
+  // the ordering.
+  const { transport, twilio, stream } = await connect("check-transfer-teardown");
+  let ended: string | null = null;
+  transport.onEnded((reason) => {
+    ended = reason;
+    // What the engine does with it: onTransportEnded -> finalise -> hangup.
+    void transport.hangup();
+  });
+  twilio.hooks.onUpdate = (update) => {
+    if (update.twiml) stream.close();
+  };
+
+  await transport.transfer(env.handoffNumber, "Recovery call, Priya, escalated for CONFUSION.");
+  await sleep(20);
+
+  check("the teardown that follows a redirect ends the call as transferred", ended === "transferred", String(ended));
+  check(
+    "the customer's leg is never completed by us",
+    !twilio.updates.some((u) => u.status === "completed"),
+    JSON.stringify(twilio.updates)
+  );
 }
 
 console.log("\n-- answering-machine detection is advisory");
