@@ -39,6 +39,10 @@ function check(label: string, ok: boolean, detail = ""): void {
 class FakeMediaStream extends EventEmitter {
   readonly sent: string[] = [];
   readyState = 1;
+  /** How long "the audio in front of the mark" takes to play out. */
+  constructor(private markDelayMs = 0) {
+    super();
+  }
   send(data: string): void {
     this.sent.push(String(data));
     // Twilio acks a mark once the audio in front of it has played out. Without
@@ -46,13 +50,19 @@ class FakeMediaStream extends EventEmitter {
     const msg = JSON.parse(String(data)) as { event: string; mark?: { name: string } };
     if (msg.event === "mark" && msg.mark) {
       const { name } = msg.mark;
-      setImmediate(() => this.emit("message", JSON.stringify({ event: "mark", mark: { name } })));
+      const ack = () => this.emit("message", JSON.stringify({ event: "mark", mark: { name } }));
+      if (this.markDelayMs) setTimeout(ack, this.markDelayMs);
+      else setImmediate(ack);
     }
   }
 
   /** Outbound audio frames, which is what "the customer can still hear us" means. */
   get mediaFrames(): number {
     return this.sent.filter((s) => s.includes('"event":"media"')).length;
+  }
+  /** Whether playback was ever cut - the barge-in's `clear`. */
+  get cleared(): boolean {
+    return this.sent.some((s) => s.includes('"event":"clear"'));
   }
   close(): void {
     this.emit("close");
@@ -71,6 +81,10 @@ function fakeStt() {
   };
   return {
     open,
+    /** The customer starts talking. */
+    start: () => events.onSpeechStart?.(),
+    /** An interim transcript, which on a real line grows word by word. */
+    partial: (text: string) => events.onPartial?.(text),
     /** The customer says something, and it commits. */
     say: (text: string, confidence = 0.9) => events.onFinal?.(text, confidence),
   };
@@ -102,12 +116,12 @@ const journey = loadJourney();
 const lead = loadLeads()[0]!;
 
 /** Dials, attaches a fake media stream, and waits for the transport to be live. */
-async function connect(callId: string, openStt?: SttOpener) {
+async function connect(callId: string, openStt?: SttOpener, markDelayMs = 0) {
   const twilio = fakeTwilio();
   const transport = new TwilioTransport({ journey, lead, callId, client: twilio.client, openStt });
   const started = transport.start();
   await sleep(20);
-  const stream = new FakeMediaStream();
+  const stream = new FakeMediaStream(markDelayMs);
   const attached = attachMediaStream(callId, stream as unknown as WebSocket);
   await sleep(20);
   stream.emit("message", JSON.stringify({ event: "start", streamSid: "MZ_fake" }));
@@ -198,6 +212,74 @@ console.log("\n-- answering-machine detection is advisory");
     "nothing is completed at Twilio",
     !twilio.updates.some((u) => u.status === "completed"),
     JSON.stringify(twilio.updates)
+  );
+}
+
+console.log("\n-- talking over the agent");
+{
+  // Two words are a customer agreeing, not taking the turn. Cutting a read-back
+  // off on "yeah okay" is a large part of what made real calls sound broken.
+  const stt = fakeStt();
+  const { transport, stream } = await connect("check-backchannel", stt.open, 150);
+  const heard: { text: string; startedAt: number | null }[] = [];
+  transport.onUtterance((text, _confidence, meta) => heard.push({ text, startedAt: meta?.startedAt ?? null }));
+
+  const line = "I have Priya Sharma. Is that right?";
+  const playing = transport.speak(line);
+  await sleep(20);
+  stt.start();
+  stt.partial("yeah");
+  stt.partial("yeah okay");
+  await sleep(5);
+  check("a two-word backchannel does not clear playback", !stream.cleared);
+  stt.say("yeah okay");
+  const result = await playing;
+  check("the line plays to the end", result.completed === true && result.heard === line, JSON.stringify(result));
+  check("the backchannel still reaches the engine", heard.length === 1 && heard[0]?.text === "yeah okay", JSON.stringify(heard));
+}
+
+{
+  const stt = fakeStt();
+  const { transport, stream } = await connect("check-turn-taker", stt.open, 150);
+  const playing = transport.speak("I have Priya Sharma. Is that right?");
+  await sleep(20);
+  stt.start();
+  stt.partial("wait");
+  await sleep(5);
+  check("a turn-taking word stops playback on its own", stream.cleared);
+  const result = await playing;
+  check("the line reports it was cut", result.completed === false, JSON.stringify(result));
+}
+
+{
+  const stt = fakeStt();
+  const { transport, stream } = await connect("check-sustained", stt.open, 2000);
+  const playing = transport.speak("First sentence here. Second sentence follows it.");
+  // Mock audio is 0.4 s a sentence: the first has played out, the second is playing.
+  await sleep(450);
+  stt.start();
+  stt.partial("hang on my dog is barking");
+  const result = await playing;
+  check("a sustained utterance stops playback", stream.cleared && result.completed === false, JSON.stringify(result));
+  check("what was heard is the sentence that had finished", result.heard === "First sentence here.", JSON.stringify(result.heard));
+}
+
+{
+  const stt = fakeStt();
+  const { transport } = await connect("check-started-at", stt.open);
+  let meta: { startedAt: number | null } | undefined;
+  transport.onUtterance((_text, _confidence, m) => {
+    meta = m;
+  });
+  const t0 = Date.now();
+  stt.start();
+  stt.partial("my name");
+  await sleep(40);
+  stt.say("my name is Priya");
+  check(
+    "the final carries when the customer started talking, not when it committed",
+    meta?.startedAt !== undefined && meta.startedAt !== null && meta.startedAt >= t0 - 2 && meta.startedAt < t0 + 25,
+    `startedAt=${meta?.startedAt} t0=${t0}`
   );
 }
 

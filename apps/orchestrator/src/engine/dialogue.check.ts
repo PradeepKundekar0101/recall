@@ -1,5 +1,5 @@
 import type { FieldValue, Lead } from "@recall/shared";
-import type { Transport, TransportEndReason } from "./transport.js";
+import type { SpeakResult, Transport, TransportEndReason, UtteranceMeta } from "./transport.js";
 import type { SignalReading } from "./escalation.js";
 
 /**
@@ -52,8 +52,13 @@ class FakeLine implements Transport {
   readonly interruptible: boolean[] = [];
   transferredTo: string | null = null;
   recordingUrl?: string;
+  /** How long each line "plays". Zero means instantly, which is what most scenarios want. */
+  speakMs = 0;
+  /** Lines that started while another was still playing. A real wire cannot do that. */
+  overlaps = 0;
+  private playing: ((result: SpeakResult) => void) | null = null;
 
-  private utteranceCb: ((text: string, confidence: number | null) => void) | null = null;
+  private utteranceCb: ((text: string, confidence: number | null, meta?: UtteranceMeta) => void) | null = null;
   private partialCb: ((text: string) => void) | null = null;
   private endedCb: ((reason: TransportEndReason) => void) | null = null;
 
@@ -61,10 +66,21 @@ class FakeLine implements Transport {
 
   async start(): Promise<void> {}
 
-  async speak(text: string, opts: { onFirstAudio?: () => void; interruptible?: boolean } = {}): Promise<void> {
+  async speak(text: string, opts: { onFirstAudio?: () => void; interruptible?: boolean } = {}): Promise<SpeakResult> {
+    if (this.playing) this.overlaps++;
     opts.onFirstAudio?.();
     this.spoken.push(text);
     this.interruptible.push(opts.interruptible ?? true);
+    if (!this.speakMs) return { completed: true, heard: text };
+    return new Promise<SpeakResult>((resolve) => {
+      const finish = (result: SpeakResult) => {
+        clearTimeout(timer);
+        this.playing = null;
+        resolve(result);
+      };
+      const timer = setTimeout(() => finish({ completed: true, heard: text }), this.speakMs);
+      this.playing = finish;
+    });
   }
 
   async speakStream(sentences: AsyncIterable<string>): Promise<string> {
@@ -75,7 +91,7 @@ class FakeLine implements Transport {
     return text;
   }
 
-  onUtterance(cb: (text: string, confidence: number | null) => void): void {
+  onUtterance(cb: (text: string, confidence: number | null, meta?: UtteranceMeta) => void): void {
     this.utteranceCb = cb;
   }
   onPartial(cb: (text: string) => void): void {
@@ -95,10 +111,17 @@ class FakeLine implements Transport {
     this.endedCb?.("hangup");
   }
 
-  /** A partial, then the committed transcript on a later tick, the way a real line delivers it. */
-  say(text: string, confidence = 0.9): void {
+  /**
+   * A partial, then the committed transcript on a later tick, the way a real line
+   * delivers it. `startedAt` is when the customer began talking, which on a real
+   * line is earlier than the commit; `cuts` talks over whatever is playing, the
+   * way the real transport's barge-in does.
+   */
+  say(text: string, confidence = 0.9, opts: { startedAt?: number; cuts?: boolean } = {}): void {
+    const startedAt = opts.startedAt ?? Date.now();
     this.partialCb?.(text);
-    setImmediate(() => this.utteranceCb?.(text, confidence));
+    if (opts.cuts && this.playing && this.interruptible.at(-1) !== false) this.playing({ completed: false, heard: "" });
+    setImmediate(() => this.utteranceCb?.(text, confidence, { startedAt }));
   }
 
   partial(text: string): void {

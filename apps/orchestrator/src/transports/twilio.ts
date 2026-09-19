@@ -5,7 +5,7 @@ import { log } from "../log.js";
 import { openStt, type SttSession } from "../voice/stt.js";
 import type { SttOpener } from "../voice/stt/types.js";
 import { synthesize } from "../voice/tts.js";
-import type { Transport, TransportDeps, TransportEndReason } from "../engine/transport.js";
+import type { SpeakResult, Transport, TransportDeps, TransportEndReason, UtteranceMeta } from "../engine/transport.js";
 
 /**
  * Twilio Media Streams <-> Deepgram / ElevenLabs, mulaw 8k end to end.
@@ -16,9 +16,12 @@ import type { Transport, TransportDeps, TransportEndReason } from "../engine/tra
  * nothing here counts silence.
  *
  * Ported from buildin-hours with the vendor swap and one addition: `transfer()`,
- * which redirects the live call to a human with a whisper. The barge-in and echo
- * defence below are unchanged, because they were earned against a real speakerphone
- * in a loud room and that is the same condition this demo runs in.
+ * which redirects the live call to a human with a whisper. The echo defence below
+ * is unchanged, because it was earned against a real speakerphone in a loud room
+ * and that is the same condition this demo runs in. The barge-in has since learnt
+ * the difference between a customer agreeing along and one taking the turn, and
+ * every line now reports whether it was heard whole - see `takesTurn()` and
+ * `SpeakResult`.
  */
 
 const FRAME_BYTES = 160; // 20ms of mulaw at 8kHz
@@ -101,7 +104,7 @@ export class TwilioTransport implements Transport {
   private streamReady!: Promise<void>;
   private markStreamReady!: () => void;
 
-  private utteranceCb: ((text: string, confidence: number | null) => void) | null = null;
+  private utteranceCb: ((text: string, confidence: number | null, meta?: UtteranceMeta) => void) | null = null;
   private partialCb: ((text: string) => void) | null = null;
   private bargeInCb: (() => void) | null = null;
   private endedCb: ((reason: TransportEndReason) => void) | null = null;
@@ -123,6 +126,14 @@ export class TwilioTransport implements Transport {
   private bargeArmed = false;
   private lastSpokenTokens = new Set<string>();
   private playbackEndedAt = 0;
+
+  /**
+   * When the customer's current utterance began - the first partial with words
+   * in it - so the engine can tell a "yes" said over the acknowledgement from a
+   * "yes" said to the read-back that followed it. Cleared when the utterance
+   * commits.
+   */
+  private utteranceStartedAt: number | null = null;
 
   /**
    * Inbound cadence. Twilio sends a frame every 20 ms; a hole in that rhythm is
@@ -273,6 +284,7 @@ export class TwilioTransport implements Transport {
       keywords: recognitionKeywords(this.opts),
       events: {
         onSpeechStart: () => {
+          if (this.utteranceStartedAt === null) this.utteranceStartedAt = Date.now();
           // Might be the customer talking over us - or our own echo. Arm the
           // barge-in and let a transcript with actual words pull the trigger.
           if (this.speaking) this.bargeArmed = true;
@@ -280,25 +292,27 @@ export class TwilioTransport implements Transport {
         onPartial: (text) => {
           this.partialCb?.(text);
           if (!this.speaking || !this.bargeArmed || !this.interruptible) return;
-          if (!meaningfulSpeech(text) || this.isEcho(text)) return;
+          if (!takesTurn(text) || this.isEcho(text)) return;
           this.bargeArmed = false;
           log.call(this.id, `barge-in confirmed by "${text.slice(0, 30)}"`);
           this.clearPlayback();
           this.bargeInCb?.();
         },
         onFinal: (text, confidence) => {
+          const startedAt = this.utteranceStartedAt;
+          this.utteranceStartedAt = null;
           // Our own line coming back at us is not the customer speaking.
           if (this.isEcho(text) && (this.speaking || Date.now() - this.playbackEndedAt < 1200)) {
             log.call(this.id, `dropped echo "${text.slice(0, 40)}"`);
             return;
           }
           // Finals can arrive without a partial ever firing; honour barge-in here too.
-          if (this.speaking && this.interruptible && meaningfulSpeech(text)) {
+          if (this.speaking && this.interruptible && takesTurn(text)) {
             this.bargeArmed = false;
             this.clearPlayback();
             this.bargeInCb?.();
           }
-          this.utteranceCb?.(text, confidence);
+          this.utteranceCb?.(text, confidence, { startedAt });
         },
         onError: (err) => log.call(this.id, `stt error: ${err.message}`),
         onClose: () => log.call(this.id, "stt socket closed"),
@@ -306,7 +320,7 @@ export class TwilioTransport implements Transport {
     });
   }
 
-  onUtterance(cb: (text: string, confidence: number | null) => void): void {
+  onUtterance(cb: (text: string, confidence: number | null, meta?: UtteranceMeta) => void): void {
     this.utteranceCb = cb;
   }
   onPartial(cb: (text: string) => void): void {
@@ -319,15 +333,16 @@ export class TwilioTransport implements Transport {
     this.endedCb = cb;
   }
 
-  async speak(text: string, opts: { onFirstAudio?: () => void; interruptible?: boolean } = {}): Promise<void> {
-    if (this.dead) return;
+  async speak(text: string, opts: { onFirstAudio?: () => void; interruptible?: boolean } = {}): Promise<SpeakResult> {
+    const nothing: SpeakResult = { completed: false, heard: "" };
+    if (this.dead) return nothing;
     this.interruptible = opts.interruptible ?? true;
 
     // Never drop a line because the stream was a beat late.
     if (!this.streamSid) await this.streamReady.catch(() => undefined);
     if (this.dead || !this.ws || !this.streamSid) {
       log.call(this.id, `WARN dropped "${text.slice(0, 40)}" - no stream to send it on`);
-      return;
+      return nothing;
     }
 
     // Sentence-level pipeline: every sentence is synthesised concurrently, and the
@@ -347,31 +362,29 @@ export class TwilioTransport implements Transport {
     // `speaking` flips on with the first frame, not before: a customer utterance
     // that lands while we are still synthesising is a queued turn, not a barge-in.
     let started = false;
+    let firstFrameAt = 0;
     let totalBytes = 0;
     let frames = 0;
-    for (const job of jobs) {
-      const audio = await job;
+    // Every sentence goes to Twilio's buffer the moment it is synthesised, so
+    // "sent" says nothing about "heard". Each one's duration does: against the
+    // clock since the first frame, it says which sentences had finished playing
+    // when the customer cut in.
+    const sent: { text: string; ms: number }[] = [];
+    for (let i = 0; i < jobs.length; i++) {
+      const audio = await jobs[i];
       if (this.dead || !this.ws || !this.streamSid) break;
       // Barge-in mid-reply: they are talking, stop feeding sentences at them.
       if (started && !this.speaking) break;
-      if (!audio.length) continue;
+      if (!audio || !audio.length) continue;
       if (!started) {
         this.speaking = true;
         started = true;
+        firstFrameAt = Date.now();
         opts.onFirstAudio?.();
       }
 
-      for (let off = 0; off < audio.length; off += FRAME_BYTES) {
-        const frame = audio.subarray(off, Math.min(off + FRAME_BYTES, audio.length));
-        this.ws.send(
-          JSON.stringify({
-            event: "media",
-            streamSid: this.streamSid,
-            media: { payload: frame.toString("base64") },
-          })
-        );
-        frames++;
-      }
+      frames += this.sendFrames(audio);
+      sent.push({ text: parts[i] as string, ms: (audio.length / 8000) * 1000 });
       totalBytes += audio.length;
     }
 
@@ -379,7 +392,7 @@ export class TwilioTransport implements Transport {
       if (!totalBytes) log.call(this.id, "WARN TTS returned zero bytes");
       this.speaking = false;
       this.playbackEndedAt = Date.now();
-      return;
+      return { completed: false, heard: heardBy(sent, firstFrameAt) };
     }
 
     const markName = `m${Date.now()}${Math.floor(Math.random() * 1000)}`;
@@ -401,8 +414,12 @@ export class TwilioTransport implements Transport {
       });
     });
 
+    // A barge-in clears `speaking` before it resolves the mark; Twilio's own
+    // mark leaves it set. That is the difference between cut and completed.
+    const completed = this.speaking;
     this.speaking = false;
     this.playbackEndedAt = Date.now();
+    return completed ? { completed: true, heard: text } : { completed: false, heard: heardBy(sent, firstFrameAt) };
   }
 
   /**
@@ -626,9 +643,36 @@ function tokenize(text: string): Set<string> {
   );
 }
 
-/** Enough words to be a person talking, rather than a cough or a car horn. */
-function meaningfulSpeech(text: string): boolean {
-  return tokenize(text).size >= 2 || text.trim().length >= 8;
+/**
+ * Words that take the turn on their own, however short the utterance. "No" over
+ * a read-back means the value is wrong; "wait" means stop.
+ */
+const TURN_TAKERS = /\b(wait|sorry|pardon|hang on|hold on|stop|no|nope|what|actually|excuse me|hey)\b/i;
+
+/**
+ * Whether the customer is taking the turn, as opposed to agreeing along.
+ *
+ * "Yeah", "okay", "yep, right" are a person telling us to keep going; cutting a
+ * read-back off on them is what made real calls sound broken. Three words, or
+ * one of the turn-taking words, is somebody who wants the floor. Backchannels
+ * still reach the engine as utterances - they just do not stop playback.
+ */
+function takesTurn(text: string): boolean {
+  return tokenize(text).size >= 3 || TURN_TAKERS.test(text);
+}
+
+/** The sentences that had finished playing `elapsed` after the first frame. */
+function heardBy(sent: { text: string; ms: number }[], firstFrameAt: number): string {
+  if (!firstFrameAt) return "";
+  const elapsed = Date.now() - firstFrameAt;
+  const heard: string[] = [];
+  let end = 0;
+  for (const part of sent) {
+    end += part.ms;
+    if (end > elapsed) break;
+    heard.push(part.text);
+  }
+  return heard.join(" ");
 }
 
 /**

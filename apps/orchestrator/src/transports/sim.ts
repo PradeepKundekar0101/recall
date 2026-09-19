@@ -1,4 +1,4 @@
-import type { Transport, TransportDeps, TransportEndReason } from "../engine/transport.js";
+import type { SpeakResult, Transport, TransportDeps, TransportEndReason } from "../engine/transport.js";
 import { log } from "../log.js";
 
 /**
@@ -80,21 +80,24 @@ export class SimTransport implements Transport {
     log.call(this.id, `sim transport - persona "${this.opts.persona.id}"`);
   }
 
-  async speak(text: string, opts: { onFirstAudio?: () => void } = {}): Promise<void> {
-    if (this.dead) return;
+  async speak(text: string, opts: { onFirstAudio?: () => void } = {}): Promise<SpeakResult> {
+    // The sim has no wire, so every line is heard whole; the Interrupter persona
+    // signals barge-in below rather than cutting anything.
+    const heard: SpeakResult = { completed: true, heard: text };
+    if (this.dead) return { completed: false, heard: "" };
     opts.onFirstAudio?.();
     this.spoken.push(text);
     log.call(this.id, `agent: ${text}`);
 
     const turn = this.nextTurn(text);
-    if (!turn) return;
+    if (!turn) return heard;
 
     // The Interrupter persona talks over the agent rather than waiting for the
     // line to finish, which is what arms barge-in in the real transport.
     if (this.opts.persona.interrupts) this.bargeInCb?.();
 
     await new Promise((r) => setTimeout(r, turn.delayMs ?? 10));
-    if (this.dead) return;
+    if (this.dead) return heard;
 
     const confidence = turn.confidence ?? this.opts.persona.confidence ?? 0.95;
     this.partialCb?.(turn.say);
@@ -112,6 +115,7 @@ export class SimTransport implements Transport {
       if (this.dead) return;
       this.utteranceCb?.(turn.say, confidence);
     });
+    return heard;
   }
 
   /**

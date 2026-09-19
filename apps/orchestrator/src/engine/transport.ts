@@ -11,6 +11,29 @@ import type { Journey, Lead } from "@recall/shared";
  * agent is Australian English only), and `onUtterance` now carries STT confidence,
  * because the LOW CONF escalation signal is defined on it.
  */
+/** What happened to a line once it was on the wire. */
+export type SpeakResult = {
+  /** False when the customer talked over it and playback was cut. */
+  completed: boolean;
+  /**
+   * The sentences that had finished playing when it was cut, or the whole line
+   * when it completed. A question that was cut before its question mark has
+   * not been asked, whatever the script says.
+   */
+  heard: string;
+};
+
+/** What the transport knows about an utterance beyond its words. */
+export type UtteranceMeta = {
+  /**
+   * When the customer started talking, in the orchestrator's clock, or null if
+   * the transport cannot tell. This is what lets the engine attribute a "yes"
+   * to the line it was said over rather than to whichever line is current by
+   * the time the transcript commits.
+   */
+  startedAt: number | null;
+};
+
 export interface Transport {
   readonly id: string;
   readonly kind: "pstn" | "sim";
@@ -30,7 +53,7 @@ export interface Transport {
    * The handoff bridge has to be heard whole: cut short by a customer still
    * finishing their address, it left them with "I'm going to" and a dead line.
    */
-  speak(text: string, opts?: { onFirstAudio?: () => void; interruptible?: boolean }): Promise<void>;
+  speak(text: string, opts?: { onFirstAudio?: () => void; interruptible?: boolean }): Promise<SpeakResult>;
 
   /**
    * Say a reply that is still being generated.
@@ -43,8 +66,11 @@ export interface Transport {
    */
   speakStream(sentences: AsyncIterable<string>, signal?: AbortSignal): Promise<string>;
 
-  /** A completed utterance from the customer, with mean STT word confidence. */
-  onUtterance(cb: (text: string, confidence: number | null) => void): void;
+  /**
+   * A completed utterance from the customer, with mean STT word confidence.
+   * `meta` is absent on transports that cannot time speech, such as the sim.
+   */
+  onUtterance(cb: (text: string, confidence: number | null, meta?: UtteranceMeta) => void): void;
 
   /** An interim transcript, for the console's grey streaming text. */
   onPartial(cb: (text: string) => void): void;
