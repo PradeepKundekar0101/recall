@@ -3,6 +3,7 @@ import cors from "cors";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { api } from "./api/routes.js";
+import { mockSandboxRouter } from "./sandbox/mock-server.js";
 import { attachMediaStream } from "./transports/twilio.js";
 import { loadJourney } from "./journey/index.js";
 import { JourneyState } from "./engine/journey-state.js";
@@ -18,6 +19,16 @@ app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: false })); // Twilio webhooks post form-encoded
 app.use(api);
+
+/**
+ * The stand-in CRM the confirmed fields are saved to.
+ *
+ * No sandbox was provided, so it lives here rather than behind a second process the
+ * demo has to remember to start. The saves are still ordinary HTTP with ordinary
+ * status codes - `SANDBOX_URL` points at this by default and at a real endpoint when
+ * there is one, and nothing in the save path knows the difference.
+ */
+app.use("/mock-crm", mockSandboxRouter());
 
 const server = createServer(app);
 
@@ -121,6 +132,7 @@ server.listen(env.port, () => {
   });
   for (const line of bootReport()) log.info(`  ${line}`);
   log.info(`  ${journeyLine}`);
+  log.info(`  saves      ${env.sandboxUrl}${env.sandboxUrl.includes("/mock-crm") ? " (mounted here)" : ""}`);
   log.info(`  leads      ${leads.length} synthetic${env.testNumbers[0] ? ` -> ${env.testNumbers[0]}` : " (NO TEST NUMBER SET)"}`);
 
   // Pre-render the fixed lines after the port is open, not before. A cold TTS

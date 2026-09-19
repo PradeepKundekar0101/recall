@@ -58,12 +58,27 @@ export type CallEvent =
     })
   | (Base & { type: "escalation.handoff"; reason: EscalationSignal; packet: HandoffPacket })
   | (Base & { type: "guardrail.trigger"; guardrail: GuardrailId; detail: string })
+  /**
+   * One request to the receiving system, with what was sent and what came back.
+   *
+   * Emitted per confirmed field as well as for the final POST, which is what the
+   * console's API logs pane renders: the operator sees the save happen rather than
+   * being told it did. `status: 0` means the request never reached a server, and
+   * `error` says why.
+   */
   | (Base & {
       type: "submit.result";
-      /** Incremental section PUTs land here too, so the drawer can show progress. */
+      /** The field id for an incremental save, `"final"` for the closing POST. */
       step: string;
       status: number;
       body: unknown;
+      method: "PUT" | "POST";
+      /** Path only - no hostname, so it stays readable on a projector. */
+      path: string;
+      request: unknown;
+      /** Round trip in milliseconds. */
+      ms: number;
+      error?: string;
     })
   /**
    * One turn's measured round trip, customer end-of-speech to agent audio.

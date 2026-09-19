@@ -1,7 +1,7 @@
 {
   "id": "energy",
   "vertical": "energy",
-  "version": "0.1.0-placeholder",
+  "version": "0.3.0-placeholder",
   "sections": [
     {
       "id": "identity",
@@ -130,8 +130,8 @@
       "capture": "natural",
       "confirm": "read_back",
       "script": {
-        "ask": "What's the street address where the energy is supplied?",
-        "reask": "Sorry, could you give me that street address again?",
+        "ask": "What's the supply address? Street, suburb and postcode is all I need.",
+        "reask": "Sorry, could you give me that address again - street, suburb and postcode?",
         "confirm": "I have {value}. Is that right?",
         "prefilled": "For the supply address, I have {value}. Is that right?"
       },
@@ -269,7 +269,8 @@
       "script": {
         "ask": "Do you have your NMI handy? It's the ten-digit number on your bill - but it's fine if you don't, we can look it up.",
         "reask": "No problem. If you have it, could you read it out slowly? Otherwise we'll look it up.",
-        "confirm": "I have {value_spelled}. Is that right?"
+        "confirm": "I have {value_spelled}. Is that right?",
+        "prefilled": "And I've got your NMI from the bill you uploaded - shall I just use that one?"
       },
       "validate": "nmi",
       "max_attempts": 2,
@@ -325,7 +326,8 @@
       "script": {
         "ask": "What date are you moving in?",
         "reask": "Sorry, which date was that?",
-        "confirm": "So that's the {value}?"
+        "confirm": "So that's the {value}?",
+        "prefilled": "And you're moving in on the {value}. Is that right?"
       },
       "validate": "date",
       "max_attempts": 2,
@@ -366,7 +368,8 @@
       },
       "script": {
         "ask": "Which type is it - pension, healthcare, veteran, or something else?",
-        "reask": "Sorry, which card type is that?"
+        "reask": "Sorry, which card type is that?",
+        "prefilled": "And that's a {value} card. Is that right?"
       },
       "max_attempts": 2,
       "sensitive": false
@@ -405,7 +408,7 @@
     }
   ],
   "scripts": {
-    "opener": "Hi, is this {first_name}? This is the econnex assistant calling about the energy comparison you started with us {when}. I'm an automated assistant, and this call is recorded for quality and compliance. Is now a good time to pick up where you left off - it'll take about three minutes?",
+    "opener": "Hi, is this {first_name}? It's the econnex assistant, calling about the energy comparison you started with us {when}. I'm an automated assistant and this call is recorded. Is now a good time to finish it off?",
     "consent_yes": "Great, thanks. Let's pick up where you left off.",
     "review": "Great, I've got everything. Just to confirm: {summary}. Shall I go ahead and submit that?",
     "close": "Done - that's submitted. You'll get a confirmation at {email}. Thanks {first_name}, have a good one.",

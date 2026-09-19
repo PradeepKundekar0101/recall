@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { CallSummary } from "@recall/shared";
 import { getJson } from "../../lib/api";
-import { Nav } from "../../components/Nav";
+import { Shell } from "../../components/Shell";
+import { PageBar } from "../../components/PageBar";
 import { Portrait } from "../../components/Portrait";
 
 /**
@@ -22,12 +23,12 @@ export default function CallHistory() {
   }, []);
 
   return (
-    <div className="console">
-      <Nav>
+    <Shell>
+      <PageBar>
         <Link href="/" className="btn btn-primary">
           Set up a call
         </Link>
-      </Nav>
+      </PageBar>
 
       <section className="step-body" aria-label="Past calls">
         <div className="intro">
@@ -70,7 +71,7 @@ export default function CallHistory() {
           </div>
         )}
       </section>
-    </div>
+    </Shell>
   );
 }
 

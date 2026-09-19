@@ -211,7 +211,7 @@ export async function startCall(opts: {
               detail,
             }),
           onOutcome: (outcome) => void finish(outcome),
-          onSubmit: (step, status, body) => bus.emitEvent(callId, { type: "submit.result", step, status, body }),
+          onSubmit: (result) => bus.emitEvent(callId, { type: "submit.result", ...result }),
           persistField: () => {
             /* the bus subscriber in index.ts mirrors every event into call_events */
           },

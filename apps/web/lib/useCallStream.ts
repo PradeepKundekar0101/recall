@@ -47,7 +47,11 @@ export type CallState = {
   signals: Partial<Record<EscalationSignal, SignalState>>;
   handoff: { reason: EscalationSignal; packet: HandoffPacket } | null;
   guardrails: { guardrail: string; detail: string; at: number }[];
-  submissions: { step: string; status: number; body: unknown }[];
+  /**
+   * Every request made to the receiving system, oldest first: one per confirmed
+   * field, then the final POST. This is what the API logs pane renders.
+   */
+  submissions: ApiCall[];
   metrics: { handsFree: number; total: number; durationS: number; baselineS: number } | null;
   /** Per-turn round trips, newest last. The demo quotes the median out loud. */
   latencies: number[];
@@ -68,6 +72,21 @@ export type CallState = {
   recording: boolean;
   /** The stream was refused outright: nothing is known about this call id. */
   missing: boolean;
+};
+
+/** One request to the receiving system, as the console shows it. */
+export type ApiCall = {
+  /** The field id that was saved, or `"final"` for the closing POST. */
+  step: string;
+  method: "PUT" | "POST";
+  path: string;
+  request: unknown;
+  /** 0 when the request never reached a server; `error` says why. */
+  status: number;
+  body: unknown;
+  ms: number;
+  error: string | null;
+  at: number;
 };
 
 const EMPTY: CallState = {
@@ -231,7 +250,23 @@ function reduce(prev: CallState, event: CallEvent): CallState {
       };
 
     case "submit.result":
-      return { ...prev, submissions: [...prev.submissions, { step: event.step, status: event.status, body: event.body }] };
+      return {
+        ...prev,
+        submissions: [
+          ...prev.submissions,
+          {
+            step: event.step,
+            method: event.method,
+            path: event.path,
+            request: event.request,
+            status: event.status,
+            body: event.body,
+            ms: event.ms,
+            error: event.error ?? null,
+            at: event.ts,
+          },
+        ],
+      };
 
     case "latency.turn":
       return { ...prev, latencies: [...prev.latencies, event.ms] };

@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import type { Journey } from "@recall/shared";
 import { getJson } from "../../../lib/api";
-import { Nav } from "../../../components/Nav";
+import { Shell } from "../../../components/Shell";
+import { PageBar } from "../../../components/PageBar";
 import { CallBoard } from "../../../components/CallBoard";
 
 /**
@@ -22,13 +23,13 @@ export default function CallPage() {
   }, []);
 
   return (
-    <div className="console">
-      <Nav phase="call">
+    <Shell>
+      <PageBar phase="call">
         <Link href="/" className="btn btn-primary">
           Set up another call
         </Link>
-      </Nav>
+      </PageBar>
       <CallBoard callId={id} journey={journey} />
-    </div>
+    </Shell>
   );
 }

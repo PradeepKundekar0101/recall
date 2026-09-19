@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import type { CallSetup as CallSetupBody, FieldValue, Journey } from "@recall/shared";
 import { getJson, postJson } from "../lib/api";
 import { sectionTitle, seedsFromLead } from "../lib/journey";
-import { Nav } from "../components/Nav";
+import { Shell } from "../components/Shell";
+import { PageBar } from "../components/PageBar";
 import { Orb } from "../components/Orb";
 import { Portrait } from "../components/Portrait";
 import type { Phase } from "../components/Stepper";
@@ -86,11 +87,11 @@ export default function OperatorConsole() {
   }
 
   return (
-    <div className="console">
-      <Nav phase={phase}>
+    <Shell>
+      <PageBar phase={phase}>
         {/* A guardrail made visible: every lead carries a test number, and the chip says which. */}
         <span className="chip chip-warn">Test run · {lead?.phone ?? "no number"}</span>
-      </Nav>
+      </PageBar>
 
       {/* The two parties, then the person on the other end as the one large
           thing on screen. The orb is the agent, still until the dial. */}
@@ -137,6 +138,6 @@ export default function OperatorConsole() {
           onDnc={addToDnc}
         />
       )}
-    </div>
+    </Shell>
   );
 }

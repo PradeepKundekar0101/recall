@@ -299,7 +299,7 @@ console.log("\n-- a field the lead already carries is confirmed, not asked");
   await line.settle();
   const emailField = engine.state.form.get("email");
   check("the prefilled email is confirmed with its value", emailField?.state === "confirmed" && emailField.value === "priya.sharma@example.com");
-  check("the first empty field is asked normally", /street address/i.test(line.last()), line.last());
+  check("the first empty field is asked normally", /supply address/i.test(line.last()), line.last());
 
   await engine.finalise("incomplete");
 }

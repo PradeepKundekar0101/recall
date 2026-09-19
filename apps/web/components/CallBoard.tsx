@@ -9,13 +9,15 @@ import { JourneyForm } from "./JourneyForm";
 import { Transcript, customerOf } from "./Transcript";
 import { EscalationPanel } from "./EscalationPanel";
 import { PayloadDrawer } from "./PayloadDrawer";
+import { ApiLogs } from "./ApiLogs";
 import { Orb } from "./Orb";
 import { Portrait } from "./Portrait";
 import { CallTiming } from "./analytics/CallTiming";
 
 /**
  * One call, live or replayed: the two parties and the telemetry across the top,
- * then transcript, journey and escalation side by side, and the payload below.
+ * then transcript, journey and escalation side by side, then the requests made to
+ * the receiving system, and the payload below.
  * Everything on it comes off the call's event stream, so a call that ended an
  * hour ago and a call that is ringing right now are the same screen.
  */
@@ -166,6 +168,8 @@ export function CallBoard({ callId, journey }: { callId: string; journey: Journe
           </div>
         </section>
       </div>
+
+      <ApiLogs calls={call.submissions} leadId={lead?.id ?? null} />
 
       {/* Draws nothing until a turn has been measured, so a call recorded before
           the orchestrator timed its stages shows no panel rather than an empty

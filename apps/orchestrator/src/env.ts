@@ -153,8 +153,16 @@ export const env = {
   silenceSecondNudgeMs: num("SILENCE_SECOND_NUDGE_MS", 12000),
   silenceAbandonMs: num("SILENCE_ABANDON_MS", 18000),
 
-  sandboxUrl: opt("SANDBOX_URL", "http://localhost:4001").replace(/\/$/, ""),
+  /**
+   * Where confirmed fields are saved. Defaults to the mock CRM the orchestrator
+   * mounts on its own port, so a demo needs one process and no third-party
+   * endpoint; point it anywhere else and nothing above this line changes.
+   */
+  // `||` rather than a fallback argument: `opt` reads an empty SANDBOX_URL as a
+  // value, and blank is how .env says "use the one mounted here".
+  sandboxUrl: (opt("SANDBOX_URL") || `http://localhost:${num("PORT", 8080)}/mock-crm`).replace(/\/$/, ""),
   sandboxAuthHeader: opt("SANDBOX_AUTH_HEADER"),
+  /** Only used by `pnpm sandbox:mock`, which runs the same routes out of process. */
   mockSandboxPort: num("MOCK_SANDBOX_PORT", 4001),
 
   /**

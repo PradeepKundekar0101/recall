@@ -152,8 +152,8 @@ for (const [postcode, want] of [["2150", "NSW"], ["3000", "VIC"], ["4000", "QLD"
 const SPOKEN: { field: string; value: string; expect: string }[] = [
   { field: "dob", value: "1989-03-07", expect: "7th of March, 1989" },
   { field: "postcode", value: "2150", expect: "2 1 5 0" },
-  { field: "phone", value: "+61412345678", expect: "0 4 1 2 3 4 5 6 7 8" },
   { field: "nmi", value: "6001234567", expect: "6 0 0 1 2 3 4 5 6 7" },
+  { field: "phone", value: "+61412345678", expect: "0 4 1 2 3 4 5 6 7 8" },
   { field: "connection_type", value: "move_in", expect: "move in" },
   { field: "full_name", value: "Priya Sharma", expect: "Priya Sharma" },
 ];

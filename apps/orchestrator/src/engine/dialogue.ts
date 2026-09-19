@@ -9,7 +9,7 @@ import type { Form } from "./fact-bus.js";
 import { EscalationDetector, angerPatternMatched, looksLikeDontKnow, redactDigits, ruleIntent, type SignalReading } from "./escalation.js";
 import { extract, type Agreement } from "./extract.js";
 import { normalise, normaliseBool, speakableValue } from "./normalise.js";
-import { submitFinal, submitSection } from "../sandbox/submit.js";
+import { submitField, submitFinal, type SubmitResult } from "../sandbox/submit.js";
 import type { AudioMeta, SpeakResult, Transport, TransportEndReason } from "./transport.js";
 import { TurnClock } from "./turn-clock.js";
 
@@ -55,7 +55,8 @@ export type EngineHooks = {
   onHandoff: (reason: EscalationSignal, evidence: string) => void;
   onGuardrail: (guardrail: string, detail: string) => void;
   onOutcome: (outcome: CallOutcome) => void;
-  onSubmit: (step: string, status: number, body: unknown) => void;
+  /** One request to the receiving system, per confirmed field and for the final POST. */
+  onSubmit: (result: SubmitResult) => void;
   /** Called the instant a field reaches `confirmed`, for the audit trail. */
   persistField: (fieldId: string) => void;
   /** One turn's measured stages. Not emitted for a turn that never reached the wire. */
@@ -112,6 +113,15 @@ export class DialogueEngine {
    * back that answered it. Reset whenever a new read-back starts.
    */
   private confirmRepeats = 0;
+  /**
+   * The section whose intro has been spoken.
+   *
+   * Tracked here rather than derived, because the obvious derivation is circular:
+   * `currentSection()` is `nextField()?.section`, which is the same field `askNext`
+   * just took the section from, so comparing the two is always equal and only the
+   * first section could ever be introduced.
+   */
+  private introducedSection: string | null = null;
   /** A committed transcript that stopped mid-thought, waiting for the rest. */
   private fragment: { text: string; confidence: number | null; startedAt: number | null } | null = null;
   private fragmentTimer: NodeJS.Timeout | null = null;
@@ -138,7 +148,14 @@ export class DialogueEngine {
 
     this.state.form.on("change", ({ field, after }) => {
       this.hooks.onFieldChange(field);
-      if (after.state === "confirmed") this.hooks.persistField(field);
+      if (after.state === "confirmed") {
+        this.hooks.persistField(field);
+        this.saveField(field);
+      } else if (after.state !== "submitted") {
+        // A correction took the field back out of confirmed. Whatever replaces it
+        // is a different value and has to be saved on its own.
+        this.state.savedFields.delete(field);
+      }
     });
 
     transport.onPartial((text) => {
@@ -766,16 +783,15 @@ export class DialogueEngine {
 
     const section = field.section;
 
-    // A completed section goes to the sandbox immediately rather than waiting for
-    // the final POST. This is the whole reason for doing it incrementally: a call
-    // that escalates at Supply has already saved Identity and Contact, so the
-    // human picks up a journey that is genuinely further along instead of one
-    // that exists only in memory.
-    this.flushCompletedSections();
+    // Catches anything confirmed before consent was on the record, which is the one
+    // case `saveField` declines to send.
+    this.flushConfirmedFields();
 
-    if (this.state.phase !== "section" || this.state.currentSection() !== section) {
+    const introduced = this.introducedSection === section;
+    this.state.phase = "section";
+    if (!introduced) {
+      this.introducedSection = section;
       const intro = this.state.journey.sections.find((s) => s.id === section)?.intro;
-      this.state.phase = "section";
       if (intro) await this.speak(intro);
     }
     this.hooks.onSection(section, field.id);
@@ -951,31 +967,47 @@ export class DialogueEngine {
   }
 
   /**
-   * Sends any section that has just become complete.
+   * Saves one confirmed field.
    *
-   * Deliberately not awaited. A sandbox that is slow or down must not add latency
-   * to the next question or stall the call - the final POST is the gate that
+   * Deliberately not awaited. A receiving system that is slow or down must not add
+   * latency to the next question or stall the call - the final POST is the gate that
    * decides whether the journey counts, and this is an optimisation on top of it.
+   *
+   * Per field rather than per section because a field is the unit the customer
+   * actually confirms: a call that escalates in the middle of Supply has already
+   * saved the address it just heard, instead of losing the part-finished section.
    */
-  private flushCompletedSections(): void {
-    for (const section of this.state.journey.sections) {
-      if (this.state.submittedSections.has(section.id)) continue;
-      if (!this.state.sectionComplete(section.id)) continue;
+  private saveField(fieldId: string): void {
+    // Guardrail 2. Nothing about this customer leaves the building before they
+    // have agreed to the call; `flushConfirmedFields` picks these up afterwards.
+    if (!this.state.consent) return;
+    if (this.state.savedFields.has(fieldId)) return;
 
-      this.state.submittedSections.add(section.id);
-      void submitSection({
-        lead: this.state.lead,
-        form: this.state.form.snapshot(),
-        section: section.id,
-        consentAt: this.state.consentAt ?? Date.now(),
+    const record = this.state.form.get(fieldId);
+    const field = this.state.fieldById(fieldId);
+    if (!record || !field) return;
+
+    this.state.savedFields.add(fieldId);
+    void submitField({ lead: this.state.lead, field: record, section: field.section })
+      .then((result) => {
+        this.hooks.onSubmit(result);
+        if (result.status < 200 || result.status >= 300) {
+          // Not surfaced to the customer: a failed save is recoverable by the final
+          // POST, which carries every value anyway. Re-opened so the next sweep
+          // tries again.
+          this.state.savedFields.delete(fieldId);
+        }
       })
-        .then((result) => this.hooks.onSubmit(result.step, result.status, result.body))
-        .catch((err) => {
-          // Logged, not surfaced: a failed partial save is recoverable by the
-          // final POST, and the customer should never hear about it.
-          log.call(this.callId, `section ${section.id} PUT failed: ${String(err)}`);
-          this.state.submittedSections.delete(section.id);
-        });
+      .catch((err) => {
+        log.call(this.callId, `field ${fieldId} PUT threw: ${String(err)}`);
+        this.state.savedFields.delete(fieldId);
+      });
+  }
+
+  /** Saves anything confirmed that has not been saved yet. Idempotent. */
+  private flushConfirmedFields(): void {
+    for (const [id, record] of Object.entries(this.state.form.snapshot())) {
+      if (record.state === "confirmed") this.saveField(id);
     }
   }
 
@@ -1000,7 +1032,7 @@ export class DialogueEngine {
           .filter((f) => f.required && this.state.form.applies(f.id))
           .map((f) => f.id),
       });
-      this.hooks.onSubmit(result.step, result.status, result.body);
+      this.hooks.onSubmit(result);
 
       if (result.status >= 200 && result.status < 300) {
         for (const id of Object.keys(form)) {
@@ -1051,8 +1083,9 @@ export class DialogueEngine {
     this.cancelTurn("handoff");
     this.state.phase = "handoff";
     this.state.handoffReason = reason;
-    // Whatever is complete goes to the sandbox before the line changes hands.
-    this.flushCompletedSections();
+    // Everything confirmed is already saved; this is the backstop before the line
+    // changes hands, so the human console opens on a journey that is up to date.
+    this.flushConfirmedFields();
     log.call(this.callId, `handoff: ${reason} - ${evidence.slice(0, 60)}`);
 
     this.hooks.onHandoff(reason, evidence);

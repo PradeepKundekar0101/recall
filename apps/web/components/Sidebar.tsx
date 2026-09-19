@@ -2,12 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import type { ReactNode } from "react";
-import { Stepper, type Phase } from "./Stepper";
 
 /**
  * The two standing views. Setting up a call is a flow with its own steps and
- * its own entry point, so it is the wordmark rather than a third link here.
+ * its own entry point, so it is the wordmark above rather than a third link
+ * here.
  */
 const VIEWS = [
   { href: "/calls", label: "Calls" },
@@ -15,19 +14,21 @@ const VIEWS = [
 ];
 
 /**
- * The top bar every page shares: the wordmark home, the standing views, the
- * three steps where a call is being set up or watched, and whatever the page
- * puts on the right.
+ * The console's left rail: the wordmark home over the standing views. Every
+ * page shares it. What belongs to the page you are on - the steps, its own
+ * actions - is the bar across the top instead.
  */
-export function Nav({ phase, children }: { phase?: Phase; children?: ReactNode }) {
+export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <header className="nav">
-      <Link href="/" className="wordmark" aria-label="Recall home">
-        <span className="wordmark-name">Recall</span>
-        <span className="wordmark-sub">Recovery call</span>
-      </Link>
+    <div className="sidebar">
+      <div className="sidebar-head">
+        <Link href="/" className="wordmark" aria-label="Recall home">
+          <span className="wordmark-name">Recall</span>
+          <span className="wordmark-sub">Recovery call</span>
+        </Link>
+      </div>
       <nav className="nav-links" aria-label="Views">
         {VIEWS.map((view) => {
           // Exact, not a prefix. A call's own page is under /calls but is not the
@@ -46,9 +47,6 @@ export function Nav({ phase, children }: { phase?: Phase; children?: ReactNode }
           );
         })}
       </nav>
-      {phase && <Stepper phase={phase} />}
-      <span className="spacer" />
-      {children}
-    </header>
+    </div>
   );
 }

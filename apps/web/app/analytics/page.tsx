@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import type { AnalyticsResponse, AnalyticsWindow } from "@recall/shared";
 import { ApiError, getJson } from "../../lib/api";
-import { Nav } from "../../components/Nav";
+import { Shell } from "../../components/Shell";
+import { PageBar } from "../../components/PageBar";
 import { StatTile } from "../../components/analytics/StatTile";
 import { Histogram } from "../../components/analytics/Histogram";
 import { StageBars } from "../../components/analytics/StageBars";
@@ -67,8 +68,8 @@ export default function Analytics() {
   }, [windowId, includeSimulated]);
 
   return (
-    <div className="console">
-      <Nav />
+    <Shell>
+      <PageBar />
 
       <section className="step-body analytics" aria-label="Analytics">
         <div className="intro">
@@ -116,7 +117,7 @@ export default function Analytics() {
 
         {data && <Dashboard data={data} />}
       </section>
-    </div>
+    </Shell>
   );
 }
 

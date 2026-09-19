@@ -3,6 +3,7 @@
 Written 19 Sep 2026, after the first successful live phone call.
 Updated the same night, after the first and second journey calls over a real phone, and again the next morning after the third and fourth, and again after the fifth, sixth and seventh.
 Next task: **run the Energy journey over a real call again and get a clean submit; the handoff itself now works.**
+Read **The three-minute cut** below first: the extra fields are seeded rather than asked now, the saves changed shape, and the section intros are finally spoken.
 The sixth call is the one to read first: the warm transfer rang the second handset, the human answered, and the two of them talked for 87 seconds.
 
 ## Where things stand
@@ -31,10 +32,13 @@ Everything is already configured in `.env`; `TRANSPORT=pstn`, `MOCK_VOICE=0`, `C
 ```bash
 nvm use                      # Node 20 is pinned, see Gotchas
 corepack pnpm twilio:check   # geo, tunnel, both handsets
-corepack pnpm sandbox:mock   # mock CIMET sandbox on :4001
-corepack pnpm dev:api        # orchestrator on :8080
+corepack pnpm dev:api        # orchestrator on :8080, mock CRM mounted at /mock-crm
 corepack pnpm dev:web        # console on :3000
 ```
+
+`pnpm sandbox:mock` is no longer part of the run.
+The mock CRM is mounted inside the orchestrator, so there is one process to start rather than two - one fewer thing to be down when the room is watching.
+The boot report prints where saves are going; `saves http://localhost:8080/mock-crm (mounted here)` is what it should say.
 
 Then dial:
 
@@ -62,7 +66,7 @@ The engine announces every prefilled field before the opener; until it did, the 
 | `pnpm setup:check` | What the console sends before a dial: seeds and removals folded into the lead, bad fields and briefs refused whole, the dial target untouched, the brief fenced inside the voice prompt, and every fixture carrying the number it will be rung on. Milliseconds, no network |
 | `pnpm tts:check` | mulaw round-trip and loudness levelling. Milliseconds, no network |
 | `pnpm transport:check` | The Twilio transport against a fake Twilio and a fake media stream: dial, handshake, transfer, the hangup that must not follow it, the answering-machine verdict that must not end a live call, talking over the agent - a backchannel that must not stop the line, a turn-taker that must, and what was heard when it did - two lines handed over at once, which must not overlap, and the media stream torn down by the redirect, which must not be read as the customer hanging up. Rings nothing |
-| `pnpm eval` | Ten simulator personas end to end |
+| `pnpm eval` | Ten simulator personas end to end. The per-field saves run for real against whatever `SANDBOX_URL` points at, so start the orchestrator first or the log fills with refused connections |
 | `pnpm voice:calibrate` | Confidence distribution, clean vs degraded |
 | `pnpm voice:replay <wav>` | A Twilio recording back through the live STT socket, paced like the media stream. Separates a bad line from a bad transcriber |
 
@@ -450,13 +454,80 @@ Collecting a whole section and confirming it once at the end costs three things 
 Prefilled values are the safe subset - they came from the web journey, so CIMET already holds them, and the read-back is a formality rather than the gate.
 Values given by voice keep their immediate read-back, because that is the case the gate exists for.
 
+## The three-minute cut
+
+The organiser confirmed there will be no sandbox and no mocked API from their side, and the demo slot is three minutes.
+Both of those landed after the seven calls above.
+
+**The journey is still all 17 fields.**
+Cutting five of them was tried and reversed: the extras are seeded on the lead instead, so the agent confirms them rather than asking them, and the journey still answers the problem statement in full.
+L-1042 now carries `nmi`, `concession: false` and `life_support: false` in its prefill on top of what it had.
+The console's setup step can clear any of them to have the agent ask outright, which is the case worth rehearsing at least once.
+
+**Seeding is not free for every field, and it is worth knowing which.**
+A seeded field is only cheap when its line speaks its value - `prefilledRun()` requires `{value}` or `{value_spelled}` in `prefilledLine(field)`, and only those join a batched read-back.
+
+| Field | Seeded costs | Why |
+| --- | --- | --- |
+| `full_name`, `dob` | nothing extra | They speak their values and batch into one line |
+| `street`, `suburb`, `postcode` | nothing extra | Same, when the customer gives them in one breath |
+| `concession`, `life_support` | one turn, same as asking | Closed bools. `speakableValue` renders a bool as "yes"/"no", which reads as nonsense in a sentence, so they deliberately have **no** `prefilled` script and `prefilledLine()` falls back to their `ask`. A line asserting "you don't hold a concession card" would simply be wrong when the operator seeds `true` |
+| `nmi` | one turn, and it used to be the worst line in the call | Without a `prefilled` script it fell back to `confirm: "I have {value_spelled}..."` and spelled eleven digits - about nine seconds, on the path the handoff already flags as risky. It now has its own line that acknowledges the number without reading it back |
+| `concession_type`, `move_in_date` | nothing | Conditional. With `concession: false` and an existing connection they never apply at all |
+
+**The address is invited in one breath.**
+`street.ask` is now "What's the supply address? Street, suburb and postcode is all I need."
+The fact bus has always accepted several fields from one utterance and read them back together; the old wording simply never asked for them.
+This is the single biggest lever on call length - four turns and about sixteen seconds - so the demo should say the whole address at once.
+A customer who gives only the street still gets asked the suburb and the postcode, so the fallback is intact, and `state` is inferred from the postcode either way.
+
+**The opener is 36 words, down from 52.**
+It still discloses the automated assistant and the recording before anything else, which is the compliance requirement.
+What went was saying it twice over.
+
+**Section intros are spoken again, all six of them.**
+They never were before: `askNext()` compared `currentSection()` against the section it had just read off the same `nextField()` call, so the comparison was always equal and only the first section could ever be introduced.
+The engine tracks `introducedSection` now and compares against that.
+Four of the six lines had been dead script since they were written.
+
+**Measured on the cooperative persona, against live models:**
+
+| Shape | Customer turns | Estimated speech |
+| --- | --- | --- |
+| Address in one breath, intros on | 15 | ~2:35 |
+| Address in one breath, intros off | 15 | ~2:21 |
+| Street only, intros on | 19 | ~2:51 |
+| Street only, intros off | 19 | ~2:37 |
+
+Those are agent words at 165 wpm plus 2.8 s per customer turn, not wall clock off a real call.
+Rehearse it and replace these with real numbers.
+If the slot gets tight, the intros are the cheapest fourteen seconds to give back - revert `introducedSection` in `askNext()` and they stop being spoken, exactly as they were for the first seven calls.
+
+**Fields are saved one at a time, the moment they are confirmed.**
+`flushCompletedSections()` is gone; `saveField()` fires off the form's `change` handler when a field reaches `confirmed`, and `flushConfirmedFields()` sweeps in `askNext()` and before a handoff.
+A field is the unit the customer actually confirms, so a call that escalates halfway through Supply has saved the address it just heard rather than losing a part-finished section.
+A correction takes its field back out of `savedFields`, so the replacement value is saved on its own - and that second PUT is visible in the console, which is worth doing on purpose in a rehearsal.
+Nothing is sent before consent is on the record: `saveField` declines while `state.consent` is false, which is why the sweep exists.
+
+**The saves go to a mock CRM the orchestrator mounts itself, at `/mock-crm`.**
+They are ordinary HTTP with ordinary status codes - `PUT /journeys/:leadId/fields/:field` per field, `POST /journeys` at the end, which is still the one that validates.
+`SANDBOX_URL` decides where they go and defaults to the mounted one when blank, so pointing at a real endpoint stays a config change and nothing in the save path knows the difference.
+A save that fails comes back as a result with status 0 rather than an exception, because a save that could not be made is still something the operator needs to see.
+
+**The console has an API logs pane**, full width under the three panes.
+One row per request: method, path, status, round trip, and the request and response JSON on opening it.
+It is the answer to "is it actually saving" being asked from the back of a room, and a failed save is a red row rather than a line in a log nobody is looking at.
+
 ## What to watch on the next journey call
 
 - Does the consent gate fire before any field is asked, and is the disclosure audible at the top.
 - Do spelled fields survive a real line: email and postcode are the risky ones.
 - Does the read-back speak a human date ("7th of March, 1989") rather than an ISO string.
 - Does state get inferred from the postcode and the question skipped entirely.
-- Do incremental section PUTs land - watch the mock sandbox log for `saved step`.
+- Do the per-field PUTs land. The API logs pane is the place to watch; the orchestrator log prints `mock CRM: saved "<field>"` for each one.
+- Does a correction produce a second PUT for the same field. Worth provoking once.
+- Do all six section intros play, and does the call still fit the slot with them in.
+- Does the seeded NMI get acknowledged rather than spelled back at eleven digits.
 - Does the console fill live at `localhost:3000`.
 - Echo: the agent hearing itself. On speakerphone this leaked through the token-overlap defence on one turn. Try a handset.
 - Do the prefilled fields land as one yes per run: name and date of birth together, then the account holder and the number as their own questions.
@@ -480,6 +551,7 @@ Values given by voice keep their immediate read-back, because that is the case t
 **Waiting on CIMET**
 
 - Real field list drops into `journey/energy.journey.json`; update `sandbox/mapping.ts`. Nothing else should need to change.
+- There is no sandbox and no mocked API coming: the organiser confirmed that. `sandbox/mock-server.ts` is the stand-in, and `SANDBOX_URL` is the seam if that changes.
 - The recording gives script phrasing and the manual baseline for the efficiency counter, which is currently `manual_baseline_s: 0`.
 
 **Known limitations found while debugging**

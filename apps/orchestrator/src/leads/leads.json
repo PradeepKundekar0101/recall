@@ -11,7 +11,10 @@
       "dob": "1989-03-07",
       "account_holder": true,
       "phone": "REPLACED_AT_LOAD",
-      "email": "priya.sharma@example.com"
+      "email": "priya.sharma@example.com",
+      "nmi": "41031234567",
+      "concession": false,
+      "life_support": false
     },
     "plan_id": "PLAN-EN-0331",
     "plan_name": "econnex Saver 12",

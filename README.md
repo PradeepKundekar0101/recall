@@ -1,7 +1,7 @@
 # RECALL
 
 **RECALL** (Recovery Call).
-Outbound AI voice agent that calls a dropped-off Energy lead, picks the comparison journey up where the customer left it, collects the remaining fields by phone, submits a valid payload to CIMET's journey sandbox, and hands the call to a human with full context the moment the conversation turns.
+Outbound AI voice agent that calls a dropped-off Energy lead, picks the comparison journey up where the customer left it, collects the remaining fields by phone, saves each one to the CRM the moment it is confirmed, and hands the call to a human with full context the moment the conversation turns.
 
 Built on the `buildin-hours` codebase (Panchayat AI).
 Telephony, the transport seam, the SSE board and the eval harness are reused; Sarvam is replaced end to end for latency.
@@ -21,7 +21,7 @@ Set the three keys, `MOCK_VOICE=0`, `TRANSPORT=pstn`, point ngrok at :8080, and 
 | Twilio + sim transports, barge-in, echo defence, warm transfer | done |
 | Form state machine, normalisers, extraction, escalation detector | done |
 | Guardrails: DNC, test-number, consent gate, card detection, decline | done |
-| Sandbox mapping, incremental + final submit, mock server | done |
+| CRM mapping, per-field incremental saves + final submit, mock endpoint | done |
 | Operator console, handoff console | done |
 | Scribe v2 Realtime STT, Deepgram fallback | Scribe verified on live calls; Deepgram fallback still unverified, no key in `.env` |
 | ElevenLabs TTS on the voice's fine-tuned model (Flash v2), loudness levelling, disk pre-render | verified with `pnpm voice:check` |
@@ -103,7 +103,7 @@ The orchestrator prints an integration report at boot, so a missing key is obvio
 | `pnpm dev` | Orchestrator on :8080 and console on :3000 |
 | `pnpm dev:api` | Orchestrator only |
 | `pnpm dev:web` | Console only |
-| `pnpm sandbox:mock` | Mock CIMET sandbox on :4001 |
+| `pnpm sandbox:mock` | The same mock CRM routes on their own port. Not needed for a demo: the orchestrator mounts them at `/mock-crm` on its own port, which is where `SANDBOX_URL` points when it is blank. |
 | `pnpm journey:check` | Validate `energy.journey.json` and print its shape |
 | `pnpm llm:check` | Prove the configured LLM can do structured extraction and streaming, and measure both. Needs `MOCK_VOICE=0`. |
 | `pnpm voice:check` | Synthesise a phrase with Flash, feed it back into Scribe, check the transcript. Needs `MOCK_VOICE=0`. |
@@ -124,7 +124,7 @@ apps/orchestrator/    Node 20 · TypeScript · Express · ESM
   src/voice/          Deepgram STT · ElevenLabs TTS · Claude Haiku
   src/transports/     Twilio media stream · simulator
   src/engine/         dialogue · fact-bus · extract · escalation · normalise
-  src/sandbox/        mapping · submit · mock server
+  src/sandbox/        mapping · submit · mock CRM (mounted at /mock-crm)
   src/eval/           ten personas and the harness
 apps/web/             Next.js 15 · App Router
   app/                / operator console · /handoff human console
@@ -137,6 +137,11 @@ packages/shared/      The SSE event union, shared by both apps
 The dialogue engine walks it, the operator console renders it, the extraction tool schema is generated from it, and the payload is mapped out of it.
 When CIMET's real field list arrives, drop it in here and update `src/sandbox/mapping.ts`.
 Nothing else should need to change.
+
+**No sandbox was provided, so the saves go to one we mount ourselves.**
+Every confirmed field is a real `PUT` over real HTTP with a real status code, served by `src/sandbox/mock-server.ts` at `/mock-crm` on the orchestrator's own port.
+The operator console's API logs pane shows the request and the response for each one.
+Pointing `SANDBOX_URL` at a real endpoint is the whole change needed to swap it.
 
 **Guardrails live in the engine, not in prompts.**
 No script and no model output can bypass them:

@@ -128,16 +128,26 @@ body::after {
 
 /* ---------- shell ---------- */
 
+/* The standing rail and the page, side by side. The page still stacks in a
+   column - that column is .console-main, and it is what the shell used to be. */
 .console {
   position: relative;
   z-index: 1;
   display: flex;
-  flex-direction: column;
-  gap: 14px;
+  gap: var(--gutter);
   height: 100vh;
   max-width: 1680px;
   margin: 0 auto;
   padding: 0 var(--gutter) var(--gutter);
+}
+
+.console-main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
 }
 
 /* Flex items default to min-width:auto, so a row full of nowrap content grows
@@ -145,11 +155,61 @@ body::after {
    by it. That is what once pushed the console sideways and clipped the
    escalation pane; the bound has to be set here for the shrink rules below to
    ever take effect. */
-.console > * { min-width: 0; }
+.console-main > * { min-width: 0; }
 
-/* ---------- nav ---------- */
+/* ---------- the rail and the standing views ----------
+   The console has exactly two places you go and stay, and setting up a call is
+   not one of them - that is a flow, and it starts at the wordmark above them.
+   Set as text rather than as pills so the chrome still has one button in it. */
 
-.nav {
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 200px;
+  padding-right: var(--gutter);
+  border-right: 1px solid var(--hairline);
+}
+
+/* The same 64px the page's bar runs to, so the wordmark sits on the line the
+   page's own heading starts from. */
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  height: 64px;
+  flex: 0 0 auto;
+}
+
+.nav-links {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+.nav-link {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 120ms ease, color 120ms ease;
+}
+.nav-link:hover { color: var(--ink); background: var(--surface-strong); }
+/* Down the rail a link is a row, so the view you are in is a filled row rather
+   than only a darker word - the same wash the hover uses, no new colour. */
+.nav-link-on {
+  color: var(--ink);
+  background: var(--surface-strong);
+}
+
+/* ---------- the page's own bar ----------
+   What belongs to the page you are on: the steps, and whatever the page puts
+   on the right. It keeps its height on a page that passes it neither, so the
+   rail's wordmark and a page's first heading line up across routes. */
+
+.pagebar {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -164,9 +224,6 @@ body::after {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding-right: 16px;
-  margin-right: 4px;
-  border-right: 1px solid var(--hairline-strong);
 }
 .wordmark-name {
   font-family: var(--font-display);
@@ -824,6 +881,134 @@ body::after {
 .script-pos-head { margin-top: 22px; }
 .script-pos { color: var(--body); }
 
+/* A pane that sits on its own below the row rather than in it. Bounded so a
+   growing log scrolls inside itself instead of stealing height from the three
+   panes above, which on a 100vh shell it otherwise would. */
+.pane-flat {
+  flex: 0 0 auto;
+  max-height: 200px;
+  transition: max-height 140ms ease;
+}
+/* A row is open, so someone is reading JSON rather than watching the ticker. The
+   three panes above scroll internally and give the room up. */
+.pane-flat-open { max-height: min(46vh, 420px); }
+
+/* ---------- API logs ----------
+   One row per request to the receiving system. The method sits in a mono chip on
+   the left and the status in the semantic chip on the right, so a screenful of
+   green 200s reads at a glance from the back of a room, and the one red row does
+   not have to be hunted for. */
+
+.apilog {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.apirow {
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-md);
+  background: var(--canvas-soft);
+}
+.apirow.api-bad {
+  border-color: var(--error-tint);
+  background: var(--error-tint);
+}
+
+.apirow-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.apirow-head:focus-visible { outline-offset: -2px; }
+
+.apimethod {
+  flex: 0 0 auto;
+  min-width: 42px;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-strong);
+  color: var(--primary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: center;
+}
+.apimethod-post { background: var(--ink); color: var(--on-primary); }
+
+.apipath {
+  /* A long lead id must not push the status chip off the row. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--body);
+}
+
+.apitag {
+  flex: 0 0 auto;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.apims {
+  flex: 0 0 auto;
+  min-width: 54px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  text-align: right;
+}
+.apichevron {
+  flex: 0 0 auto;
+  width: 12px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--muted-soft);
+  text-align: center;
+}
+
+.apibody {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 4px 12px 12px;
+  border-top: 1px solid var(--hairline-soft);
+}
+.apiside { min-width: 0; }
+.apijson {
+  margin: 6px 0 0;
+  max-height: 170px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--body);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 900px) {
+  .apibody { grid-template-columns: 1fr; }
+}
+
 /* ---------- payload drawer ---------- */
 
 .drawer {
@@ -1370,8 +1555,21 @@ a.btn-primary { color: var(--on-primary); }
    The console targets a 1440px projector, but the handoff view gets opened on
    whatever laptop is nearest, so it has to hold up narrow. */
 @media (max-width: 1100px) {
-  .console { height: auto; min-height: 100vh; }
-  .nav { flex-wrap: wrap; height: auto; padding: 12px 0; }
+  .console { flex-direction: column; height: auto; min-height: 100vh; gap: 0; }
+  /* The rail lies down rather than collapsing behind a button: two text links
+     and the wordmark fit across the top, which is where they used to be. */
+  .sidebar {
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 16px;
+    padding-right: 0;
+    border-right: none;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .sidebar-head { height: 56px; }
+  .nav-links { flex-direction: row; align-items: center; gap: 4px; }
+  .pagebar { flex-wrap: wrap; height: auto; padding: 12px 0; }
   .callhead { flex-wrap: wrap; }
   .stats { margin-left: 0; gap: 24px; width: 100%; }
   .panes { grid-template-columns: 1fr; }
@@ -1647,33 +1845,6 @@ a.btn-primary { color: var(--on-primary); }
   }
   .stages-hint { grid-column: 2 / -1; }
 }
-
-/* ---------- the standing views ----------
-   Two links, beside the wordmark and behind the same hairline: the console has
-   exactly two places you go and stay, and setting up a call is not one of them
-   - that is a flow, and it starts at the wordmark. Set as text rather than as
-   pills so the nav still has one button in it. */
-
-.nav-links {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: 0 0 auto;
-}
-.nav-link {
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--muted);
-  text-decoration: none;
-  white-space: nowrap;
-  transition: background 120ms ease, color 120ms ease;
-}
-.nav-link:hover { color: var(--ink); background: var(--surface-strong); }
-/* The view you are in is the one written in ink, the same way the step you are
-   on is in the stepper. */
-.nav-link-on { color: var(--ink); }
 
 /* ---------- the analytics page ----------
    The dashboard is one column of bands: the controls and the window they

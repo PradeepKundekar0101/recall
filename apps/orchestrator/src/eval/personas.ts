@@ -118,20 +118,20 @@ export const personas: Persona[] = [
     label: "Cooperative",
     expect: "Journey submitted, 0 re-asks",
     turns: [
-      { when: /good time|three minutes/i, say: "Yes, now's fine." },
+      { when: /good time|couple of minutes/i, say: "Yes, now's fine." },
       // The name and the date of birth arrive as one read-back now, answered by
       // confirmReply. A turn keyed on either of them would never fire.
       { when: /account holder/i, say: "Yes, that's me." },
       { when: /best one to reach|this number/i, say: "Yes, that's the one." },
       { when: /email/i, say: "p-r-i-y-a dot sharma at gmail dot com." },
-      { when: /street address/i, say: "42 Wattle Street." },
+      { when: /supply address/i, say: "42 Wattle Street." },
       { when: /suburb/i, say: "Parramatta." },
       { when: /postcode/i, say: "Two one five zero." },
       { when: /which state/i, say: "New South Wales." },
       { when: /electricity, gas, or both/i, say: "Electricity only." },
-      { when: /NMI/i, say: "I don't have it handy, sorry." },
+      { when: /NMI/i, say: "Yeah, use that one." },
       { when: /already living in|moving in/i, say: "Already living here." },
-      { when: /concession or pensioner/i, say: "No." },
+      { when: /concession or pensioner/i, say: "No, still none." },
       { when: /life-support/i, say: "No, nothing like that." },
       { when: /put you down for that/i, say: "Yes please." },
       { when: /go ahead and submit/i, say: "Yes, go ahead." },
@@ -142,17 +142,17 @@ export const personas: Persona[] = [
     label: "Volunteers early",
     expect: "Address and postcode both captured, confirmed once, never re-asked",
     turns: [
-      { when: /good time|three minutes/i, say: "Yeah go on then." },
+      { when: /good time|couple of minutes/i, say: "Yeah go on then." },
       // The name and the date of birth arrive as one read-back now, answered by
       // confirmReply. A turn keyed on either of them would never fire.
       { when: /account holder/i, say: "Yes." },
       { when: /this number/i, say: "Yes." },
       { when: /email/i, say: "priya dot sharma at gmail dot com." },
       // The whole point: three fields in one breath.
-      { when: /street address/i, say: "It's 42 Wattle Street, Parramatta, 2150." },
+      { when: /supply address/i, say: "It's 42 Wattle Street, Parramatta, 2150." },
       { when: /which state/i, say: "New South Wales." },
       { when: /electricity, gas, or both/i, say: "Just electricity." },
-      { when: /NMI/i, say: "No idea." },
+      { when: /NMI/i, say: "Yep." },
       { when: /already living in|moving in/i, say: "Existing." },
       { when: /concession/i, say: "No." },
       { when: /life-support/i, say: "No." },
@@ -195,7 +195,7 @@ export const personas: Persona[] = [
     label: "Busy",
     expect: "Callback window captured, outcome callback, ended politely",
     turns: [
-      { when: /good time|three minutes/i, say: "Sorry, I'm in the middle of something. Can you call back later?" },
+      { when: /good time|couple of minutes/i, say: "Sorry, I'm in the middle of something. Can you call back later?" },
       { when: /morning or afternoon/i, say: "Tomorrow morning would be better." },
     ],
   },
@@ -204,7 +204,7 @@ export const personas: Persona[] = [
     label: "Decliner",
     expect: "Outcome declined, opt-out added, no second ask, no persuasion turn",
     turns: [
-      { when: /good time|three minutes/i, say: "Not interested. Stop calling me." },
+      { when: /good time|couple of minutes/i, say: "Not interested. Stop calling me." },
     ],
   },
   {
