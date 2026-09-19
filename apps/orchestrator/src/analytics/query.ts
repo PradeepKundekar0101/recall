@@ -21,6 +21,23 @@ import type {
  * endpoint changing shape.
  */
 
+/** `typeof x === "number"` alone admits NaN, which would poison any sum it reaches. */
+function num(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/**
+ * The turn kind a stored payload claims, as a kind this codebase still has.
+ *
+ * Rows written before the rename carry "generated", which was the old name for
+ * what is now "synthesised". Mapping it here keeps those turns inside the
+ * by-kind split instead of leaving them in a bucket nothing counts.
+ */
+function kindOf(value: unknown): TurnRow["kind"] {
+  if (value === "closed_field" || value === "cached_line" || value === "synthesised") return value;
+  return "synthesised";
+}
+
 const WINDOW_MS: Record<AnalyticsWindow, number | null> = {
   "24h": 24 * 60 * 60 * 1000,
   "7d": 7 * 24 * 60 * 60 * 1000,
@@ -106,25 +123,43 @@ export async function loadAnalytics(
   if (turnError) log.warn(`analytics.turns: ${turnError.message}`);
   if (fieldError) log.warn(`analytics.fields: ${fieldError.message}`);
 
-  const turns = (turnRows ?? []).map((row): TurnRow => {
+  const turns: TurnRow[] = [];
+  let partialTurns = 0;
+  for (const row of turnRows ?? []) {
     const p = (row.payload ?? {}) as Record<string, unknown>;
-    const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
-    return {
+    const think = num(p.think_ms);
+    const wireWait = num(p.wire_wait_ms);
+    const ttsTtfb = num(p.tts_ttfb_ms);
+    const firstAudio = num(p.first_audio_ms);
+    // The four required stages are all or nothing. `?? 0` here would hand the
+    // aggregate a fabricated 0 ms sample, which lands in the budget percentile
+    // as the fastest turn ever measured - exactly the zero-for-missing that
+    // aggregate.ts's header comment forbids. TurnClock.finish() returns null
+    // rather than a partial, so no row written today can reach this, but the
+    // reader is the wrong place to depend on the writer staying that way.
+    if (think === null || wireWait === null || ttsTtfb === null || firstAudio === null) {
+      partialTurns += 1;
+      continue;
+    }
+    turns.push({
       call_id: String(row.call_id),
       at: String(row.at),
-      think_ms: num(p.think_ms) ?? 0,
+      think_ms: think,
       llm_ttfb_ms: num(p.llm_ttfb_ms),
       llm_total_ms: num(p.llm_total_ms),
-      wire_wait_ms: num(p.wire_wait_ms) ?? 0,
-      tts_ttfb_ms: num(p.tts_ttfb_ms) ?? 0,
-      first_audio_ms: num(p.first_audio_ms) ?? 0,
+      wire_wait_ms: wireWait,
+      tts_ttfb_ms: ttsTtfb,
+      first_audio_ms: firstAudio,
       prompt_tokens: num(p.prompt_tokens),
       completion_tokens: num(p.completion_tokens),
       model: typeof p.model === "string" ? p.model : null,
       tts_chars: num(p.tts_chars) ?? 0,
-      kind: (p.kind as TurnRow["kind"]) ?? "synthesised",
-    };
-  });
+      kind: kindOf(p.kind),
+    });
+  }
+  // Loud, because a stage that stops arriving would otherwise shrink the sample
+  // silently and the dashboard would keep drawing a confident median over it.
+  if (partialTurns) log.warn(`analytics.turns: skipped ${partialTurns} rows missing a required stage`);
 
   const fieldEvents = (fieldRows ?? []).map((row): FieldEventRow => {
     const p = (row.payload ?? {}) as Record<string, unknown>;
