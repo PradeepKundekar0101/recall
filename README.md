@@ -23,8 +23,8 @@ Set the three keys, `MOCK_VOICE=0`, `TRANSPORT=pstn`, point ngrok at :8080, and 
 | Guardrails: DNC, test-number, consent gate, card detection, decline | done |
 | Sandbox mapping, incremental + final submit, mock server | done |
 | Operator console, handoff console | done |
-| Scribe v2 Realtime STT, Deepgram fallback | written, unverified against live audio |
-| ElevenLabs Flash v2.5 TTS, disk pre-render | written, unverified against live audio |
+| Scribe v2 Realtime STT, Deepgram fallback | Scribe verified on live calls; Deepgram fallback still unverified, no key in `.env` |
+| ElevenLabs TTS on the voice's fine-tuned model (Flash v2), loudness levelling, disk pre-render | verified with `pnpm voice:check` |
 | Dialogue engine, barge-in cancellation, silence handling | done |
 | Echo mode and per-turn latency measurement | done |
 | Energy scripts and field list | placeholder until the recording arrives |
@@ -108,8 +108,12 @@ The orchestrator prints an integration report at boot, so a missing key is obvio
 | `pnpm llm:check` | Prove the configured LLM can do structured extraction and streaming, and measure both. Needs `MOCK_VOICE=0`. |
 | `pnpm voice:check` | Synthesise a phrase with Flash, feed it back into Scribe, check the transcript. Needs `MOCK_VOICE=0`. |
 | `pnpm voice:calibrate` | Measure the confidence scale clean vs degraded. Re-run on real phone audio. |
+| `pnpm voice:replay <wav>` | Feed a Twilio call recording back through the live STT socket, paced like the media stream, to tell a bad line from a bad transcriber. |
 | `pnpm twilio:check` | Geo permissions, from-number, trial status, tunnel websocket upgrade |
 | `pnpm eval` | Run the ten simulator personas (gate: 9/10) |
+| `pnpm dialogue:check` | The engine's turn logic against a fake line: prefilled values confirmed rather than asked, the second attempt heard before CONFUSION, nudges held while the customer talks. No vendors. |
+| `pnpm tts:check` | mulaw round-trip and loudness levelling. Milliseconds, no network. |
+| `pnpm transport:check` | The Twilio transport against a fake Twilio and a fake media stream: dial, stream handshake, warm transfer, and the hangup that must not follow a transfer. No phone is rung. |
 | `pnpm typecheck` | All three packages |
 
 ## Layout
