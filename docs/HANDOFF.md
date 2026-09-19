@@ -397,6 +397,34 @@ The `<Dial>` is simply the last verb in the document, so when it ended the call 
 From the customer's chair: "I'm going to get a colleague to help you", a pause, and then nothing.
 Fixed by giving the `<Dial>` an `action` URL. `/twilio/handoff-result/:callId` answers it: `completed` means the human took the call and there is nothing left to say, and anything else gets an honest sentence - "I couldn't reach a colleague just now, someone will call you straight back" - before the line goes down. The escalation packet is already on the human console with the transcript, which is what that sentence is promising. What is *not* built is taking a callback time by voice: the media stream is gone and the engine has finalised by then.
 
+## How a yes is decided
+
+Code first, model second, and the two directions are not equally safe.
+
+The common words resolve in `normaliseBool` in single-digit milliseconds, which is what a third of the journey's questions need and what survives a bad line.
+That list will never be finished, though.
+"Right." only got into it because call `aead90d7` lost a date of birth to it, and gotcha, spot on, bang on and you got it were all waiting behind.
+
+So anything the list cannot place is handed to the model - which was **already being called on exactly those turns**, because anything the code cannot resolve goes to the extractor.
+It was simply never asked the question that mattered; it was asked for field values.
+It now gets the read-back in front of it and answers yes, no or unclear.
+There is no extra round trip and no extra latency on the common path.
+
+A wrong "no" costs a turn and a re-ask.
+A wrong "yes" writes a value the customer may have been objecting to into an energy signup.
+So a "no" is taken as it comes, and a "yes" only counts for a reply short enough to have been one, with no digits in it.
+
+Measured against the live model on a date-of-birth read-back: yes to "bang on, mate", "gotcha", "you got it", "mm", "aye"; no to "nah that's not me"; unclear to "sorry, what?" and "well that depends on which one you mean".
+It also answers yes to "can you repeat that?" - which never reaches this code, because `ruleIntent` decides a repeat before the model is consulted.
+That layering is what makes the guard affordable, and it is worth not disturbing.
+
+Two traps the word list itself had, both now covered by `pnpm normalise:check`:
+"no worries" and "no problem" are agreement, and the no pattern was reading the leading word at face value and clearing the value; and a yes word and a no word in one breath ("yeah nah, that's the one") resolved to no unless the turn contained "correct" or "that's right".
+Anything still ambiguous returns undecided rather than a confident refusal, which hands it to the model rather than to a coin toss.
+
+Consent and the review gate still use the code path alone.
+A missed yes there re-asks rather than escalating, so it costs a turn and nothing else - but it is the obvious next place to extend this if rehearsal shows it.
+
 ## Confirming what the lead already carries
 
 Every prefilled field used to cost its own read-back and its own yes.
