@@ -7,6 +7,7 @@ import type {
   GuardrailId,
   HandoffPacket,
   Lead,
+  TurnTiming,
 } from "./call.js";
 
 /**
@@ -70,6 +71,13 @@ export type CallEvent =
    * rehearsal checklist asserts a median under 800 ms on these.
    */
   | (Base & { type: "latency.turn"; ms: number; utterance: string; over_budget: boolean })
+  /**
+   * One turn's stage split, emitted once per agent reply.
+   *
+   * Flattened rather than nested so the audit mirror can be aggregated with
+   * `payload->>'first_audio_ms'` instead of a nested path.
+   */
+  | (Base & { type: "turn.timing" } & TurnTiming)
   /** Top-right counter: the 25% criterion, said out loud during the demo. */
   | (Base & {
       type: "metrics.update";

@@ -183,3 +183,53 @@ export type CallSummary = {
   /** Whether this orchestrator process is still running the call. */
   live: boolean;
 };
+
+/**
+ * Which of three very different things a turn was.
+ *
+ * Without this split the timing chart is three overlapping distributions
+ * pretending to be one, and the average across them is meaningless: a closed
+ * field matched in code resolves in single-digit milliseconds, a pre-rendered
+ * script line plays off disk with no synthesis, and a generated reply pays for
+ * both a model round trip and a live TTS socket.
+ */
+export type TurnKind = "closed_field" | "cached_line" | "generated";
+
+/**
+ * One turn's measured stages, customer transcript in hand to agent audio on the
+ * wire.
+ *
+ * Time zero is the committed transcript rather than end of speech. Scribe runs
+ * with `include_timestamps` on, but word end times are not modelled by the
+ * transcript type this codebase reads, so end of speech is not a boundary that
+ * can be defended.
+ *
+ * `think_ms`, `wire_wait_ms` and `tts_ttfb_ms` tile the turn: on a turn that
+ * completed every stage they sum to `first_audio_ms`. The two LLM numbers are
+ * nested inside `think_ms` and are a breakdown of it, not a fourth slice.
+ */
+export type TurnTiming = {
+  /** Transcript in hand to reply decided. Contains the model round trip, when there is one. */
+  think_ms: number;
+  /**
+   * Request sent to first token. Only measurable on the streaming path; the
+   * extraction call is not streamed, so this is null on those turns rather
+   * than a copy of `llm_total_ms` dressed up as a first-token measurement.
+   */
+  llm_ttfb_ms: number | null;
+  /** Request sent to last token. Null on a closed field, which never reaches the model. */
+  llm_total_ms: number | null;
+  /** Reply decided to wire free. The previous line was still playing. */
+  wire_wait_ms: number;
+  /** Text handed to TTS to first audio frame. Near zero for a pre-rendered line. */
+  tts_ttfb_ms: number;
+  /** Transcript to first audio. The number the 800 ms budget is set on. */
+  first_audio_ms: number;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  /** The model that was actually called, not the configured default. Null when none was. */
+  model: string | null;
+  /** Characters handed to TTS, which is how ElevenLabs bills. */
+  tts_chars: number;
+  kind: TurnKind;
+};
