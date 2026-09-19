@@ -388,6 +388,113 @@ console.log("\n-- the answer to a re-ask is heard before CONFUSION is judged");
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n-- a read-back nobody answered is said again, not thrown away");
+{
+  // Call aead90d7. The customer corrected their date of birth, it was captured
+  // at 0.90 and read back correctly, and the reply to the read-back came back
+  // as "Thank you." at 0.50 - the recording has them saying "Right.". Neither a
+  // yes, a no nor a value, so the engine binned the date it had just been
+  // given, asked for it again, and charged the field an attempt for the
+  // privilege. One more miss and CONFUSION handed off a customer who had
+  // answered correctly the first time.
+  //
+  // Not hearing the answer to a read-back is not the same as being told the
+  // value is wrong. The read-back is said again, at no cost to the attempts,
+  // and only a second miss gives up on it.
+  const { line, engine, captured } = scenario("unheard-read-back", IDENTITY_AND_CONTACT, {
+    extract: async ({ utterance }) => ({
+      accepted: /september/i.test(utterance)
+        ? [{ field: "dob", value: "2002-09-01", confidence: 0.9, evidence: utterance, needsConfirm: true }]
+        : [],
+      rejected: [],
+      intent: "answer" as const,
+      ms: 0,
+    }),
+  });
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+  line.say("Yes.");
+  await line.settle();
+
+  check("the walk reaches the date of birth", /7th of March, 1989/.test(line.last()), line.last());
+  line.say("Uh, no. Uh, it's 1st of September, 2002.");
+  await line.settle();
+  check("the correction is read back", /1st of September, 2002/.test(line.last()), line.last());
+
+  const attemptsBefore = engine.state.form.get("dob")?.attempts ?? 0;
+  line.say("Thank you.", 0.5);
+  await line.settle();
+
+  const dob = engine.state.form.get("dob");
+  check("the date the customer gave is kept", dob?.value === "2002-09-01", JSON.stringify(dob));
+  check("the read-back is said again rather than the field re-asked", /1st of September, 2002/.test(line.last()), line.last());
+  check("saying it again costs no attempt", dob?.attempts === attemptsBefore, `${String(dob?.attempts)} vs ${attemptsBefore}`);
+
+  line.say("Yes.");
+  await line.settle();
+  check("a yes to the second read-back confirms it", engine.state.form.get("dob")?.state === "confirmed", JSON.stringify(engine.state.form.get("dob")));
+  check("no handoff on a customer who answered", captured.handoff === null, String(captured.handoff));
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a read-back nobody answers twice gives up and asks again");
+{
+  const { line, engine } = scenario("unheard-read-back-twice", IDENTITY_AND_CONTACT, {
+    extract: async ({ utterance }) => ({
+      accepted: /september/i.test(utterance)
+        ? [{ field: "dob", value: "2002-09-01", confidence: 0.9, evidence: utterance, needsConfirm: true }]
+        : [],
+      rejected: [],
+      intent: "answer" as const,
+      ms: 0,
+    }),
+  });
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+  line.say("Yes.");
+  await line.settle();
+  line.say("Uh, no. Uh, it's 1st of September, 2002.");
+  await line.settle();
+
+  line.say("Thank you.", 0.5);
+  await line.settle();
+  line.say("Thank you.", 0.5);
+  await line.settle();
+
+  check("the second miss asks for the date again", /date of birth again/i.test(line.last()), line.last());
+  check("and that costs an attempt", engine.state.form.get("dob")?.attempts === 2, JSON.stringify(engine.state.form.get("dob")));
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a read-back answered with a whole sentence is not said again");
+{
+  // The mumbler. Read back an email, they answer "mmf shrrm at gmnl" - four
+  // words, no yes in them, nothing the extractor can take. That is not a
+  // misheard yes, it is a correction we failed to make out, and saying the
+  // read-back again would talk past them. The field gets asked outright in its
+  // own re-ask wording, which for email is the one that offers to spell it.
+  const { line, engine } = scenario("read-back-sentence", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+
+  check("the walk reaches the name read-back", /Priya Sharma/.test(line.last()), line.last());
+  line.say("mmf shrrm at gmnl", 0.38);
+  await line.settle();
+
+  check("the field is asked outright", /didn'?t catch that\. What was your full name/i.test(line.last()), line.last());
+  check("and that costs an attempt", engine.state.form.get("full_name")?.attempts === 2, JSON.stringify(engine.state.form.get("full_name")));
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
 console.log("\n-- two failed attempts still hand off");
 {
   const { line, engine, captured } = scenario("cap", THROUGH_SUPPLY);

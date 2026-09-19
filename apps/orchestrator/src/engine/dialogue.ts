@@ -34,6 +34,15 @@ import type { SpeakResult, Transport, TransportEndReason } from "./transport.js"
  *     and those race by design.
  */
 
+/**
+ * How often a read-back is said again before the value behind it is given up on.
+ *
+ * One. A customer who answers a read-back twice with something we cannot parse
+ * is better served by being asked for the value outright, and the attempt that
+ * costs is the honest accounting of it.
+ */
+const MAX_CONFIRM_REPEATS = 1;
+
 export type EngineHooks = {
   onAgentLine: (text: string) => void;
   onCustomerLine: (text: string, confidence: number | null) => void;
@@ -91,6 +100,11 @@ export class DialogueEngine {
   private questionDelivered = true;
   /** Questions asked so far, so a turn can tell whether it asked one. */
   private asks = 0;
+  /**
+   * Times the read-back on the line has been said again because nothing came
+   * back that answered it. Reset whenever a new read-back starts.
+   */
+  private confirmRepeats = 0;
   /** A committed transcript that stopped mid-thought, waiting for the rest. */
   private fragment: { text: string; confidence: number | null; startedAt: number | null } | null = null;
   private fragmentTimer: NodeJS.Timeout | null = null;
@@ -566,7 +580,31 @@ export class DialogueEngine {
         return this.askField(this.state.fieldById(fieldId), { reask: true });
       }
 
-      // Neither a yes, a no, nor a value. Ask once more rather than guessing.
+      // Neither a yes, a no, nor a value.
+      //
+      // Not hearing the answer to a read-back is not the same as being told the
+      // value is wrong, and this used to do the same thing as a "no": throw away
+      // a value the customer had already given and ask for it again. On call
+      // aead90d7 a date of birth captured at 0.90 and read back correctly was
+      // binned because the reply to the read-back came through as "Thank you."
+      // at 0.50 - the recording has them saying "Right." - and the re-ask cost
+      // the field an attempt, so one more miss handed off a customer who had
+      // answered correctly the first time.
+      //
+      // So the read-back is said again, at no cost to the attempts, and only a
+      // second miss gives up on the value and asks for it outright.
+      // Only when the reply was too short to have been anything but a yes or a
+      // no. A customer who says four words at a read-back is not agreeing, they
+      // are correcting us and we failed to make it out - "mmf shrrm at gmnl" to
+      // an email read-back - and what helps them is being asked for the value
+      // outright, in the field's own re-ask wording. Three words is the same
+      // boundary the transport uses to tell someone taking the turn from
+      // someone agreeing along.
+      if (wordCount(text) < 3 && this.confirmRepeats < MAX_CONFIRM_REPEATS) {
+        this.confirmRepeats++;
+        await this.speak("Sorry, I didn't catch that.");
+        return this.confirm(pending, { repeat: true });
+      }
       for (const id of pending) this.state.form.reject(id);
       return this.askField(this.state.fieldById(fieldId), { reask: true });
     }
@@ -739,7 +777,9 @@ export class DialogueEngine {
    * that right?" rather than three separate read-backs, which is both faster and
    * what a person would actually do.
    */
-  private async confirm(fieldIds: string[]): Promise<void> {
+  private async confirm(fieldIds: string[], opts: { repeat?: boolean } = {}): Promise<void> {
+    // A fresh read-back gets its own budget of repeats.
+    if (!opts.repeat) this.confirmRepeats = 0;
     const pending = fieldIds.filter((id) => {
       const field = this.state.fieldById(id);
       const value = this.state.form.get(id)?.value;
@@ -1124,6 +1164,11 @@ export class DialogueEngine {
   get isFinalised(): boolean {
     return this.finalised;
   }
+}
+
+/** Words with something in them, for telling a misheard yes from a real reply. */
+function wordCount(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
 function sameValue(a: FieldValue, b: FieldValue | undefined): boolean {

@@ -206,6 +206,7 @@ export class JourneyState {
       ...journey.sections.map((s) => s.intro),
       ...JourneyState.FILLERS,
       "Sorry, are you still there?",
+      "Sorry, I didn't catch that.",
       "I'll let you go for now. Thanks for your time.",
     ];
   }
