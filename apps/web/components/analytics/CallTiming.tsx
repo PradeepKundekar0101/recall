@@ -6,13 +6,13 @@ import { ms } from "../../lib/analytics";
  *
  * Without it a fast turn is unreadable: a closed field is matched in code and
  * never reaches the model, a cached line plays off disk with no synthesis, and
- * only a generated reply pays for both. Ten green bars mean nothing until you
- * know how many of them were real work.
+ * only a synthesised line waits on a live TTS socket. Ten green bars mean
+ * nothing until you know how many of them were real work.
  */
 const KIND_LABEL: Record<TurnTiming["kind"], string> = {
   closed_field: "matched in code",
   cached_line: "played from cache",
-  generated: "generated",
+  synthesised: "synthesised live",
 };
 
 /**

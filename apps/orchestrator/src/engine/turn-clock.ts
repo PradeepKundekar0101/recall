@@ -59,7 +59,14 @@ export class TurnClock {
     if (this.audio === null) this.audio = meta;
   }
 
-  /** The reply came out of the model rather than a script. */
+  /**
+   * The reply came out of the model rather than a script.
+   *
+   * Nothing reaches this today: it is called from the `generate: true` branch of
+   * dialogue.ts, and no caller sets that flag. Kept because it is correct for
+   * the path it guards and that path is still wired up. Until something does set
+   * it, every `synthesised` turn got there through the cache miss below.
+   */
   markGenerated(): void {
     this.generated = true;
   }
@@ -69,10 +76,15 @@ export class TurnClock {
     this.closedField = true;
   }
 
+  /**
+   * Synthesised is the fallback because it is the honest one: a line that did
+   * not come out of the pre-render went to a live TTS socket, whether the words
+   * were scripted or generated.
+   */
   private kind(): TurnKind {
     if (this.closedField) return "closed_field";
-    if (this.generated) return "generated";
-    return this.audio?.cached ? "cached_line" : "generated";
+    if (this.generated) return "synthesised";
+    return this.audio?.cached ? "cached_line" : "synthesised";
   }
 
   /**

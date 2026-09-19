@@ -61,7 +61,7 @@ function turn(over: Partial<TurnRow> = {}): TurnRow {
     completion_tokens: 40,
     model: "gpt-4o-mini",
     tts_chars: 60,
-    kind: "generated",
+    kind: "synthesised",
     ...over,
   };
 }
@@ -105,19 +105,19 @@ function report(over: Partial<{ calls: CallLite[]; turns: TurnRow[]; fieldEvents
 {
   const r = report({
     turns: [
-      turn({ kind: "generated", llm_total_ms: 900 }),
+      turn({ kind: "synthesised", llm_total_ms: 900 }),
       turn({ kind: "closed_field", llm_total_ms: null, llm_ttfb_ms: null, prompt_tokens: null, completion_tokens: null, model: null, first_audio_ms: 40, think_ms: 5, wire_wait_ms: 5, tts_ttfb_ms: 30 }),
     ],
   });
   check("llm stats count only turns that reached the model", r.latency.llm.total?.n === 1, String(r.latency.llm.total?.n));
   check("first-audio stats count every turn", r.latency.first_audio?.n === 2, String(r.latency.first_audio?.n));
-  check("by_kind splits the two apart", r.latency.by_kind.closed_field?.n === 1 && r.latency.by_kind.generated?.n === 1);
+  check("by_kind splits the two apart", r.latency.by_kind.closed_field?.n === 1 && r.latency.by_kind.synthesised?.n === 1);
 }
 
 // ---- cached lines stay out of the synthesis statistics
 {
   const r = report({
-    turns: [turn({ kind: "generated", tts_chars: 100 }), turn({ kind: "cached_line", tts_chars: 50 })],
+    turns: [turn({ kind: "synthesised", tts_chars: 100 }), turn({ kind: "cached_line", tts_chars: 50 })],
   });
   check("tts_chars counts every line", r.usage.tts_chars === 150, String(r.usage.tts_chars));
   check("synthesised chars exclude cached lines", r.usage.tts_chars_synthesised === 100, String(r.usage.tts_chars_synthesised));

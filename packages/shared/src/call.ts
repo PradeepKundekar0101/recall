@@ -192,10 +192,17 @@ export type CallSummary = {
  * Without this split the timing chart is three overlapping distributions
  * pretending to be one, and the average across them is meaningless: a closed
  * field matched in code resolves in single-digit milliseconds, a pre-rendered
- * script line plays off disk with no synthesis, and a generated reply pays for
- * both a model round trip and a live TTS socket.
+ * script line plays off disk with no synthesis, and a synthesised line waits on
+ * a live TTS socket.
+ *
+ * `synthesised` says what the measurement is - a line that went to TTS at call
+ * time instead of coming out of the pre-render - and not where the words came
+ * from. In practice almost every one of them is a script line that missed the
+ * cache, because nothing in the engine currently takes the streamed-reply path.
+ * The name used to be `generated`, which claimed a model round trip that these
+ * turns had never paid for.
  */
-export type TurnKind = "closed_field" | "cached_line" | "generated";
+export type TurnKind = "closed_field" | "cached_line" | "synthesised";
 
 /**
  * One turn's measured stages, customer transcript in hand to agent audio on the

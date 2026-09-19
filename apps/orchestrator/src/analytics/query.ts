@@ -122,7 +122,7 @@ export async function loadAnalytics(
       completion_tokens: num(p.completion_tokens),
       model: typeof p.model === "string" ? p.model : null,
       tts_chars: num(p.tts_chars) ?? 0,
-      kind: (p.kind as TurnRow["kind"]) ?? "generated",
+      kind: (p.kind as TurnRow["kind"]) ?? "synthesised",
     };
   });
 

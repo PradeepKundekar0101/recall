@@ -77,7 +77,7 @@ function countBy<T>(rows: T[], pick: (row: T) => string | null): Record<string, 
   return out;
 }
 
-const KINDS: TurnKind[] = ["closed_field", "cached_line", "generated"];
+const KINDS: TurnKind[] = ["closed_field", "cached_line", "synthesised"];
 
 /** Fixed buckets, so two windows drawn side by side share an x axis. */
 const HISTOGRAM_EDGES = [0, 200, 400, 600, 800, 1000, 1500, 2000, 3000];
