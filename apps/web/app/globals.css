@@ -419,6 +419,23 @@ html, body {
 }
 .handoff-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 
+.handoff-title { margin: 4px 0 20px; }
+.handoff-reason .label { color: inherit; }
+.handoff-evidence { font-size: 15px; margin-top: 6px; }
+.handoff-elapsed { margin-top: 8px; }
+
+/* Before a transfer fires this screen has nothing to show, which is the normal
+   case - it sits open on a second laptop, waiting. Framed so it reads as ready
+   rather than as a page that failed to load. */
+.handoff-idle {
+  border: 1px dashed var(--rule);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  max-width: 60ch;
+  color: var(--ink-dim);
+}
+.handoff-idle code { color: var(--ink); }
+
 .empty {
   color: var(--ink-faint);
   padding: 24px 0;

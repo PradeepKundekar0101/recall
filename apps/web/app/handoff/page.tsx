@@ -35,12 +35,13 @@ export default function HandoffConsole() {
   if (!callId) {
     return (
       <main className="handoff">
-        <h1 className="bar-id">Handoff console</h1>
-        <p className="empty">
-          Open this with a call id to see its packet, for example
-          <code> /handoff?call=&lt;call-id&gt;</code>. The operator console links here when a
-          transfer fires.
-        </p>
+        <div className="label">Handoff console</div>
+        <h1 className="bar-id handoff-title">Waiting for a transfer</h1>
+        <div className="handoff-idle">
+          Open this with a call id to watch a call and catch its packet the moment
+          one fires, for example <code>/handoff?call=&lt;call-id&gt;</code>. The operator
+          console links here when a transfer fires.
+        </div>
       </main>
     );
   }
@@ -48,17 +49,15 @@ export default function HandoffConsole() {
   return (
     <main className="handoff">
       <div className="label">Handoff console</div>
-      <h1 className="bar-id" style={{ margin: "4px 0 20px" }}>
+      <h1 className="bar-id handoff-title">
         {call.lead ? `${call.lead.full_name} · ${call.lead.id}` : callId}
       </h1>
 
       {packet ? (
         <div className="handoff-reason">
-          <div className="label" style={{ color: "inherit" }}>
-            Escalated · {packet.reason.replace(/_/g, " ")}
-          </div>
-          <div style={{ fontSize: 15, marginTop: 6 }}>&ldquo;{packet.evidence}&rdquo;</div>
-          <div className="meter-score" style={{ marginTop: 8 }}>
+          <div className="label">Escalated · {packet.reason.replace(/_/g, " ")}</div>
+          <div className="handoff-evidence">&ldquo;{packet.evidence}&rdquo;</div>
+          <div className="meter-score handoff-elapsed">
             {packet.duration_s}s on the line before the transfer
           </div>
         </div>
