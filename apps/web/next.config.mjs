@@ -36,6 +36,16 @@ const nextConfig = {
       ...config.watchOptions,
       ignored: ["**/node_modules/**", "**/.next/**", "**/.git/**"],
     };
+    // @recall/shared is TypeScript source written for NodeNext, so its own
+    // imports carry the `.js` extension the emitted files would have had. Nothing
+    // emits them here, so webpack looks for a `journey.js` that does not exist and
+    // the whole console fails to build the moment anything imports a value rather
+    // than a type from that package. `.js` stays first so a real .js file still
+    // wins, and the .ts fallback only applies where there is nothing to find.
+    config.resolve.extensionAlias = {
+      ...config.resolve.extensionAlias,
+      ".js": [".js", ".ts", ".tsx"],
+    };
     return config;
   },
 };

@@ -11,6 +11,7 @@ import { EscalationPanel } from "./EscalationPanel";
 import { PayloadDrawer } from "./PayloadDrawer";
 import { Orb } from "./Orb";
 import { Portrait } from "./Portrait";
+import { CallTiming } from "./analytics/CallTiming";
 
 /**
  * One call, live or replayed: the two parties and the telemetry across the top,
@@ -165,6 +166,11 @@ export function CallBoard({ callId, journey }: { callId: string; journey: Journe
           </div>
         </section>
       </div>
+
+      {/* Draws nothing until a turn has been measured, so a call recorded before
+          the orchestrator timed its stages shows no panel rather than an empty
+          one promising numbers that were never taken. */}
+      <CallTiming timings={call.timings} />
 
       <PayloadDrawer payload={{ lead_id: lead?.id ?? null, form }} submissions={call.submissions} />
     </>

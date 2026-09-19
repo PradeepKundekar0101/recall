@@ -11,6 +11,7 @@ import type {
   Journey,
   Lead,
   TranscriptLine,
+  TurnTiming,
 } from "@recall/shared";
 import { API } from "./api";
 
@@ -50,6 +51,15 @@ export type CallState = {
   metrics: { handsFree: number; total: number; durationS: number; baselineS: number } | null;
   /** Per-turn round trips, newest last. The demo quotes the median out loud. */
   latencies: number[];
+  /**
+   * The same turns broken into their stages, oldest first.
+   *
+   * Kept beside `latencies` rather than replacing it: that one is the single
+   * number the header quotes every second on a live call, and this one is the
+   * breakdown the timing panel draws. A call that ran before the orchestrator
+   * measured stages carries the first and not the second.
+   */
+  timings: TurnTiming[];
   /** The operator's brief for this call, as the agent received it. */
   agentBrief: string | null;
   /** Whether a phone rang. Null until the call's first event says. */
@@ -79,6 +89,7 @@ const EMPTY: CallState = {
   submissions: [],
   metrics: null,
   latencies: [],
+  timings: [],
   agentBrief: null,
   simulated: null,
   recording: false,
@@ -224,6 +235,12 @@ function reduce(prev: CallState, event: CallEvent): CallState {
 
     case "latency.turn":
       return { ...prev, latencies: [...prev.latencies, event.ms] };
+
+    // The event is a TurnTiming flattened into the envelope, so it is already the
+    // shape the panel reads and is stored whole. The array's type is what keeps
+    // the envelope's own fields out of the panel's reach.
+    case "turn.timing":
+      return { ...prev, timings: [...prev.timings, event] };
 
     case "metrics.update":
       return {
