@@ -9,7 +9,7 @@ import { JourneyState } from "./engine/journey-state.js";
 import { prerender } from "./voice/tts.js";
 import { loadLeads } from "./leads/index.js";
 import { bus } from "./events.js";
-import { recordEvent } from "./db/repo.js";
+import { closeOrphanedCalls, recordEvent } from "./db/repo.js";
 import { env, bootReport, has } from "./env.js";
 import { log } from "./log.js";
 
@@ -114,6 +114,11 @@ server.on("error", (err: NodeJS.ErrnoException) => {
 
 server.listen(env.port, () => {
   log.info(`RECALL orchestrator on :${env.port}`);
+  // Only now: the bind succeeded, so no other orchestrator is serving, and any
+  // call still marked live belongs to a process that is gone.
+  void closeOrphanedCalls().then((ids) => {
+    if (ids.length) log.warn(`closed ${ids.length} call(s) left live by a previous run: ${ids.join(", ")}`);
+  });
   for (const line of bootReport()) log.info(`  ${line}`);
   log.info(`  ${journeyLine}`);
   log.info(`  leads      ${leads.length} synthetic${env.testNumbers[0] ? ` -> ${env.testNumbers[0]}` : " (NO TEST NUMBER SET)"}`);

@@ -66,6 +66,38 @@ export async function closeCall(opts: {
 }
 
 /** Mirrors an SSE event into the audit log. Called for every event on the bus. */
+/**
+ * Closes calls left open by an orchestrator that is no longer here.
+ *
+ * A call lives in one process: its transport, its engine and its silence timers
+ * all die with it. A row still marked live on boot therefore belongs to a
+ * process that is gone - most often `tsx watch` restarting on a source edit
+ * while a call was up - and nothing will ever close it. The console then reads
+ * that row back and shows a call that has been live for hours.
+ *
+ * Only ever called once this process owns the port. A second orchestrator that
+ * loses the bind must not close the calls the first one is still running.
+ */
+export async function closeOrphanedCalls(): Promise<string[]> {
+  const client = sb();
+  if (!client) return [];
+  const open: CallStatus[] = ["queued", "dialling", "answered", "live", "handoff"];
+  const { data, error } = await client
+    .from("calls")
+    .update({
+      status: "ended" satisfies CallStatus,
+      outcome: "disconnected" satisfies CallOutcome,
+      ended_at: new Date().toISOString(),
+    })
+    .in("status", open)
+    .select("id");
+  if (error) {
+    log.warn(`repo.closeOrphanedCalls: ${error.message}`);
+    return [];
+  }
+  return (data ?? []).map((row) => String(row.id));
+}
+
 export async function recordEvent(event: CallEvent): Promise<void> {
   const client = sb();
   if (!client) return;
