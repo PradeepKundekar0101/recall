@@ -18,21 +18,26 @@ export function PayloadDrawer({
   const [open, setOpen] = useState(false);
   const final = submissions.find((s) => s.step === "final");
   const ok = final ? final.status >= 200 && final.status < 300 : null;
+  const saves = submissions.filter((s) => s.step !== "final").length;
 
   return (
     <div className="drawer">
       <button className="drawer-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         <span className="label">Sandbox payload</span>
-        <span className={ok === null ? "" : ok ? "drawer-ok" : "drawer-err"}>
-          {final ? `${final.status} ${ok ? "accepted" : "rejected"}` : "not submitted"}
-        </span>
-        {submissions.length > 0 && (
-          <span className="meter-score">
-            {submissions.filter((s) => s.step !== "final").length} section saves
+        {final ? (
+          <span className={`chip ${ok ? "chip-success" : "chip-error"}`}>
+            {final.status} {ok ? "accepted" : "rejected"}
+          </span>
+        ) : (
+          <span className="pane-meta">Not submitted</span>
+        )}
+        {saves > 0 && (
+          <span className="pane-meta">
+            {saves} section {saves === 1 ? "save" : "saves"}
           </span>
         )}
-        <span className="bar-spacer" />
-        <span className="meter-score">{open ? "hide" : "show"}</span>
+        <span className="spacer" />
+        <span className="drawer-toggle">{open ? "Hide" : "Show"}</span>
       </button>
 
       {open && (

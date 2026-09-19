@@ -1,45 +1,62 @@
 /* ============================================================
    recall - operator console
-   An instrument panel for a call in flight, not a dashboard.
-   Everything on screen is telemetry off a live line, so the
-   data voice is monospace and the chrome stays out of its way.
+   The ElevenLabs product dialect, per apps/web/DESIGN.md: an off-white
+   floor, white cards on hairlines, warm near-black ink, a light
+   grotesque for the one large line on screen, Inter for everything
+   that is read, and the agent drawn as an orb. Everything on screen is
+   still telemetry off a live line; the chrome is just quieter about it
+   than the old instrument panel was.
    ============================================================ */
 
 :root {
-  /* Ground: deep slate-navy rather than black. Black on a projector
-     crushes the field-state colours into each other; this holds them apart. */
-  --ground: #0e1420;
-  --panel: #151d2c;
-  --panel-2: #1b2637;
-  --rule: #24314a;
-  --rule-soft: #1d2740;
+  /* Surfaces. The floor is off-white so that white cards read as cards. */
+  --canvas: #f5f5f5;
+  --canvas-soft: #fafafa;
+  --surface: #ffffff;
+  --surface-strong: #f0efed;
+  --row: #f7f6f5;
 
-  /* The ink ramp is sized for a projector rather than a monitor. Every step
-     clears WCAG AA against --panel-2, the lightest surface any of it sits on:
-     measured 12.9 / 6.8 / 4.7. The previous ramp bottomed out at 2.7, which is
-     where every 11px label lived, and low contrast is the first thing a
-     projector washes out. */
-  --ink: #e6edf7;
-  --ink-dim: #98afd2;
-  --ink-faint: #7690bd;
+  --hairline: #e7e5e4;
+  --hairline-soft: #f0efed;
+  --hairline-strong: #d6d3d1;
 
-  /* Field states. Fixed by the brief; everything else defers to them. */
-  /* Empty is the one state that is an absence, so it stays the quietest of the
-     seven - but it still has to clear 3:1 as a border to be seen at all. */
-  --st-empty: #687c9a;
-  --st-prefilled: #4c8dff;
-  --st-asking: #f0a93b;
-  --st-captured: #f0a93b;
-  --st-confirmed: #3ecf8e;
-  --st-submitted: #2fae76;
-  --st-redacted: #ff5c5c;
+  /* Ink. Warm near-black, never pure black. */
+  --ink: #0c0a09;
+  --primary: #292524;
+  --primary-active: #0c0a09;
+  --body: #4e4e4e;
+  --muted: #777169;
+  --muted-soft: #a8a29e;
+  --on-primary: #ffffff;
 
-  --live: #3ecf8e;
-  --alarm: #ff5c5c;
-  --warn: #f0a93b;
+  /* Semantic. DESIGN.md gives success and error; info and warn are added
+     because the field states are fixed by the brief and need a blue and an
+     amber. Each text shade clears 4.5:1 on white, each line shade is the
+     brighter sibling used for bars and dots, each tint is the wash behind. */
+  --info: #2563eb;
+  --info-line: #3b82f6;
+  --info-tint: #eaf1fe;
+  --warn: #b45309;
+  --warn-line: #f2b04a;
+  --warn-tint: #fdf3e2;
+  --success: #15803d;
+  --success-line: #16a34a;
+  --success-tint: #e7f6ec;
+  --error: #dc2626;
+  --error-line: #ef4444;
+  --error-tint: #fdecec;
 
-  --gutter: 16px;
-  --radius: 3px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --pill: 9999px;
+  --shadow-soft: 0 4px 16px rgba(0, 0, 0, 0.04);
+  --gutter: 20px;
+
+  --font-sans: var(--font-inter), Inter, system-ui, sans-serif;
+  --font-display: var(--font-geist), var(--font-inter), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
 }
 
 * { box-sizing: border-box; }
@@ -47,48 +64,362 @@
 html, body {
   margin: 0;
   padding: 0;
-  background: var(--ground);
+  background: var(--canvas);
   color: var(--ink);
-  font-family: var(--font-mono), ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 13px;
-  line-height: 1.45;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  /* Inter runs a touch looser than default here, the site's editorial dialect. */
+  letter-spacing: 0.01em;
   -webkit-font-smoothing: antialiased;
 }
 
-/* Labels, eyebrows, panel headers. Condensed so a dense panel header
-   still reads from the back of a room. */
+/* ---------- atmosphere ----------
+   The site's brand voltage is photographic: a soft gradient bloom and a
+   grain over it. Both sit under the cards, so the cards stay clean white
+   and the colour only ever shows in the floor around them. */
+
+body::before {
+  content: "";
+  position: fixed;
+  z-index: 0;
+  left: -6vw;
+  top: -16vh;
+  width: 112vw;
+  height: 130vh;
+  /* The top of the image is its pastel band - sky, white, a little peach -
+     so that is the band that sits behind the header; the greens further
+     down are masked away before they reach the panes. */
+  background: url("/brand/bloom.webp") 50% 0% / 100% auto no-repeat;
+  filter: blur(32px) saturate(0.8);
+  opacity: 0.4;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 22%, transparent 58%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 22%, transparent 58%);
+  pointer-events: none;
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  z-index: 0;
+  inset: 0;
+  background: url("/brand/noise.png") repeat;
+  background-size: 256px 256px;
+  opacity: 0.06;
+  mix-blend-mode: multiply;
+  pointer-events: none;
+}
+
+/* Eyebrows: section labels, the drawer title, the handoff console's header. */
 .label {
-  font-family: var(--font-cond), system-ui, sans-serif;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+  font-size: 12px;
   font-weight: 600;
-  font-size: 11px;
-  color: var(--ink-faint);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.spacer { flex: 1; }
+
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
 }
 
 /* ---------- shell ---------- */
 
 .console {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
   height: 100vh;
-  max-width: 1440px;
+  max-width: 1680px;
   margin: 0 auto;
+  padding: 0 var(--gutter) var(--gutter);
 }
 
-/* Grid items default to min-width:auto, so a row full of nowrap content grows to
-   its min-content width and overflows this container rather than being bounded
-   by it. That is what pushed the console sideways and clipped the escalation
-   pane when a call ended: the bar was 1740px wide inside a 1440px shell, and
-   because the flex container then exactly fitted its own contents, none of the
-   flex-shrink below could ever take effect. */
+/* Flex items default to min-width:auto, so a row full of nowrap content grows
+   to its min-content width and overflows the shell rather than being bounded
+   by it. That is what once pushed the console sideways and clipped the
+   escalation pane; the bound has to be set here for the shrink rules below to
+   ever take effect. */
 .console > * { min-width: 0; }
+
+/* ---------- nav ---------- */
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 64px;
+  flex: 0 0 auto;
+}
+
+/* The wordmark is the one place the display face runs at 400: everything
+   else in the nav is a control, so the product name has to be the thing that
+   is obviously not a control. */
+.wordmark {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-right: 16px;
+  margin-right: 4px;
+  border-right: 1px solid var(--hairline-strong);
+}
+.wordmark-name {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 20px;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  color: var(--ink);
+}
+.wordmark-sub {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Buttons are the brand's pills: ink for the one primary action, an outline
+   for everything else. */
+.btn {
+  height: 40px;
+  padding: 0 18px;
+  border-radius: var(--pill);
+  border: 1px solid transparent;
+  font: 500 14px/1 var(--font-sans);
+  letter-spacing: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.btn-primary {
+  background: var(--primary);
+  color: var(--on-primary);
+}
+.btn-primary:hover { background: var(--primary-active); }
+.btn-primary:disabled {
+  background: var(--hairline-strong);
+  color: var(--surface);
+  cursor: default;
+}
+.btn-outline {
+  background: var(--surface);
+  color: var(--ink);
+  border-color: var(--hairline-strong);
+}
+.btn-outline:hover { border-color: var(--ink); }
+
+/* The lead picker is pre-call chrome - nobody changes lead mid-call - so it
+   reads as a control rather than as another piece of telemetry. It is also the
+   thing that gives way first when the nav runs out of room, with a floor that
+   still shows a lead id. */
+.select {
+  appearance: none;
+  height: 40px;
+  padding: 0 34px 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%230c0a09' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    no-repeat right 12px center;
+  color: var(--ink);
+  font: 500 14px/1 var(--font-sans);
+  min-width: 10ch;
+  flex: 0 100 auto;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.select:hover { border-color: var(--ink); }
+
+/* Chips are the product's tinted pills. The test-run chip is a guardrail
+   made visible, and a simulated call outranks it: that one is going to ring a
+   phone, this one never will. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: var(--pill);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  background: var(--surface-strong);
+  color: var(--ink);
+  flex: 0 0 auto;
+}
+.chip-warn { background: var(--warn-tint); color: var(--warn); }
+.chip-error { background: var(--error-tint); color: var(--error); }
+.chip-success { background: var(--success-tint); color: var(--success); }
+.chip-info { background: var(--info-tint); color: var(--info); }
+
+/* ---------- call header ----------
+   The person on the other end of the line is the one large thing on screen,
+   set in the display face at 300 the way the site sets a headline. The
+   telemetry sits to the right as plain tiles: a small label over a light
+   value, nothing bold. */
+
+.callhead {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 4px 4px 14px;
+  flex: 0 0 auto;
+}
+.callhead-lead {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.lead-name {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: 30px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lead-sub {
+  margin-top: 5px;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Nothing in the header may wrap. A header that reflows as values arrive
+   makes the whole panel jitter mid-call, which on a projector reads as a
+   glitch rather than as data changing. */
+.stats {
+  display: flex;
+  gap: 36px;
+  margin-left: auto;
+  align-items: flex-start;
+  flex: 0 0 auto;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.stat-label {
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.stat-value {
+  font-size: 20px;
+  font-weight: 400;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* Reserved for the statuses that arrive while the call is running (dialling,
+   answered, live), so nothing shifts during the call. Not reserved for
+   "ended - submitted": that arrives once, after the call is over. */
+.stat-status .stat-value { min-width: 9ch; }
+/* Past a second the call stops feeling like a conversation, so the number that
+   says so turns red. */
+.stat-over { color: var(--error); }
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted-soft);
+  margin-right: 8px;
+  vertical-align: 2px;
+}
+.status-dialling { background: var(--warn-line); animation: pulse 0.9s ease-in-out infinite; }
+.status-answered, .status-live { background: var(--success-line); }
+.status-live { animation: pulse 1.6s ease-in-out infinite; }
+.status-handoff { background: var(--error-line); }
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* ---------- the orb ----------
+   The signature. One image, six states. */
+
+.orb {
+  position: relative;
+  display: inline-block;
+  width: var(--orb-size, 48px);
+  height: var(--orb-size, 48px);
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.orb-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  box-shadow: inset 0 0 0 1px rgba(12, 10, 9, 0.06), 0 1px 2px rgba(12, 10, 9, 0.06);
+  transition: filter 500ms ease, opacity 500ms ease;
+  will-change: transform;
+}
+.orb-ring {
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  border: 1.5px solid transparent;
+  transition: border-color 300ms ease;
+  pointer-events: none;
+}
+.orb-idle .orb-img,
+.orb-queued .orb-img { filter: saturate(0.5); opacity: 0.8; }
+.orb-dialling .orb-img { animation: orb-pulse 1.2s ease-in-out infinite; }
+.orb-dialling .orb-ring { border-color: var(--warn-line); animation: ring-out 1.2s ease-out infinite; }
+.orb-answered .orb-img,
+.orb-live .orb-img { animation: orb-breathe 3.2s ease-in-out infinite; }
+.orb-speaking-agent .orb-img { animation: orb-breathe 1.1s ease-in-out infinite; }
+/* The customer talking: the orb listens, with a still blue ring. */
+.orb-speaking-customer .orb-ring { border-color: var(--info-line); }
+.orb-handoff .orb-ring { border-color: var(--error-line); }
+.orb-handoff .orb-img { box-shadow: 0 0 0 5px var(--error-tint); }
+.orb-ended .orb-img { filter: grayscale(1); opacity: 0.45; }
+
+@keyframes orb-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+@keyframes orb-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
+@keyframes ring-out {
+  0% { transform: scale(0.92); opacity: 0.9; }
+  100% { transform: scale(1.35); opacity: 0; }
+}
+
+/* A refused dial is the one message the operator cannot be allowed to miss. */
+.notice {
+  flex: 0 0 auto;
+  padding: 10px 16px;
+  border-radius: var(--radius-lg);
+  background: var(--error-tint);
+  color: var(--error);
+  font-weight: 500;
+}
+
+/* ---------- panes ---------- */
 
 .panes {
   display: grid;
   grid-template-columns: 30fr 40fr 30fr;
-  gap: 1px;
-  background: var(--rule-soft);
+  gap: 16px;
+  flex: 1 1 0;
   min-height: 0;
 }
 
@@ -96,408 +427,450 @@ html, body {
   /* Same reason as .console > *: a long unbroken transcript token must not be
      allowed to widen its column and squeeze the other two. */
   min-width: 0;
-  background: var(--panel);
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-xl);
 }
 
 .pane-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--rule-soft);
+  padding: 14px 20px 12px;
+  border-bottom: 1px solid var(--hairline-soft);
   flex: 0 0 auto;
+}
+.pane-title {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.pane-meta {
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .pane-body {
   overflow-y: auto;
-  padding: 12px 14px;
+  padding: 12px 20px 20px;
   flex: 1 1 auto;
   min-height: 0;
   scrollbar-width: thin;
-  scrollbar-color: var(--rule) transparent;
+  scrollbar-color: var(--hairline-strong) transparent;
 }
 
-/* ---------- lead + call bar ---------- */
-
-.bar {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 12px 16px;
-  background: var(--panel-2);
-  border-bottom: 1px solid var(--rule);
+.empty {
+  color: var(--muted);
+  padding: 20px 0;
+  max-width: 44ch;
+  line-height: 1.5;
 }
-
-/* The wordmark is the one place the condensed face runs large. Everything else
-   in the bar is data, so the product name has to be the thing that is obviously
-   not data. */
-.wordmark {
-  font-family: var(--font-cond), system-ui, sans-serif;
-  font-weight: 700;
-  font-size: 22px;
-  letter-spacing: 0.14em;
-  line-height: 1;
-  padding-right: 18px;
-  border-right: 1px solid var(--rule);
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.wordmark-sub {
-  font-size: 9px;
-  font-weight: 500;
-  letter-spacing: 0.22em;
-  color: var(--ink-faint);
-  text-transform: uppercase;
-}
-
-.bar-id {
-  font-size: 17px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-}
-
-.bar-meta { display: flex; gap: 18px; align-items: baseline; }
-/* Nothing in the call bar may wrap. A header that reflows as values arrive
-   makes the whole panel jitter mid-call, which on a projector reads as a
-   glitch rather than as data changing. */
-.bar .label,
-.bar .stat-value { white-space: nowrap; }
-
-.bar-spacer { flex: 1; }
-
-/* The bar may not wrap, so something has to give when a value grows. The status
-   gains "- disconnected" the moment a call ends, and that alone put the bar 54px
-   past a 1440 viewport: with every child nowrap and nothing allowed to shrink,
-   the overflow pushed the whole console sideways and clipped the escalation
-   pane off the right edge. Forbidding the wrap had only traded jitter for that.
-   The picker gives way first because it is chrome, then the lead name. The
-   telemetry never gives way. */
-/* The picker absorbs essentially all of it: heavily weighted to shrink, with a
-   floor that still shows a lead id. The lead name only gives way once the
-   picker has nothing left, which takes a name far longer than a real one. */
-.bar-select { min-width: 9ch; flex: 0 100 auto; }
-.bar-lead { min-width: 0; flex: 0 1 auto; }
-.bar-lead .bar-id { overflow: hidden; text-overflow: ellipsis; }
-.bar-meta,
-.testrun,
-.bar-btn { flex: 0 0 auto; }
-
-/* Reserved for the statuses that arrive while the call is running (dialling,
-   answered, live), so nothing shifts during the call. Deliberately NOT reserved
-   for "ended - disconnected": that arrives once, after the call is over, and
-   reserving 22ch for it truncated an ordinary lead name for the whole call to
-   save one reflow nobody is watching by then. */
-.stat-status .stat-value { min-width: 10ch; }
-
-.stat { display: flex; flex-direction: column; gap: 2px; }
-.bar-btn {
-  padding: 6px 12px;
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  background: none;
-  color: var(--ink-dim);
-  font: inherit;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.bar-btn:hover { color: var(--ink); border-color: var(--ink-faint); }
-.bar-btn-go { border-color: var(--live); color: var(--live); }
-.bar-btn:focus-visible { outline: 2px solid var(--st-prefilled); outline-offset: 1px; }
-.stat-value { font-size: 15px; font-variant-numeric: tabular-nums; }
-/* Past a second the call stops feeling like a conversation, so the number that
-   says so turns red. */
-.stat-over { color: var(--alarm); }
-
-/* The lead picker is pre-call chrome - nobody changes lead mid-call - so it
-   reads as a control rather than as another piece of telemetry. */
-.bar-select {
-  background: var(--panel);
-  color: var(--ink);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  padding: 6px 8px;
-  font: inherit;
-}
-.bar-select:hover { border-color: var(--ink-faint); }
-.bar-select:focus-visible { outline: 2px solid var(--st-prefilled); outline-offset: 1px; }
-
-/* A refused dial is the one message the operator cannot be allowed to miss. */
-.notice {
-  padding: 8px 16px;
-  background: rgba(255, 92, 92, 0.1);
-  color: var(--alarm);
-  border-bottom: 1px solid var(--rule);
-}
-
-/* The TEST RUN banner is a guardrail made visible, so it is the one piece of
-   chrome allowed to shout. Diagonal hazard stripes, not a coloured pill. */
-/* Bound by the same no-wrap rule as the rest of the bar. At the 1440 target it
-   was breaking "TEST RUN . <number>" over three lines, which pushed the bar
-   11px taller and left the one piece of chrome allowed to shout looking broken. */
-.testrun {
-  white-space: nowrap;
-  padding: 5px 10px;
-  border: 1px solid var(--warn);
-  border-radius: var(--radius);
-  color: var(--warn);
-  background: repeating-linear-gradient(
-    -45deg,
-    transparent 0 6px,
-    rgba(240, 169, 59, 0.09) 6px 12px
-  );
-}
-
-/* A simulated call is a stronger warning than a test run: the test run is going
-   to ring a phone, this one never will. Same chip, alarm palette. */
-.testrun-sim {
-  border-color: var(--alarm);
-  color: var(--alarm);
-  background: repeating-linear-gradient(
-    -45deg,
-    transparent 0 6px,
-    rgba(255, 92, 92, 0.12) 6px 12px
-  );
-}
-
-.status-dot {
-  display: inline-block;
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  background: var(--st-empty);
-  margin-right: 7px;
-  vertical-align: middle;
-}
-.status-live { background: var(--live); animation: pulse 1.6s ease-in-out infinite; }
-.status-handoff { background: var(--alarm); }
-.status-dialling { background: var(--warn); animation: pulse 0.9s ease-in-out infinite; }
-
-@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
 /* ---------- transcript ---------- */
 
-.turn { margin-bottom: 12px; }
-.turn-head { display: flex; gap: 8px; align-items: baseline; margin-bottom: 2px; }
-.turn-who { font-family: var(--font-cond), sans-serif; text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; font-weight: 600; }
-.turn-agent .turn-who { color: var(--st-prefilled); }
-.turn-customer .turn-who { color: var(--ink-dim); }
-.turn-at { font-size: 10px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
-.turn-text { color: var(--ink); }
-/* Interim results stay grey until the transcript finalises. */
-.turn-interim .turn-text { color: var(--ink-faint); font-style: italic; }
-
-.tag {
-  display: inline-block;
-  font-family: var(--font-cond), sans-serif;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: var(--radius);
-  border: 1px solid currentColor;
-  margin-left: 6px;
+/* Before a call the transcript has nothing to show, which is the normal
+   case. The orb sits there so the empty pane reads as the agent waiting
+   rather than as a pane that failed to load. */
+.transcript-idle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 14px;
+  padding: 56px 16px 24px;
 }
-.tag-guardrail { color: var(--alarm); }
+.transcript-idle .empty { padding: 0; }
+
+.turn {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 10px;
+  padding: 7px 0;
+}
+.turn-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  margin-top: 1px;
+  object-fit: cover;
+  box-shadow: inset 0 0 0 1px rgba(12, 10, 9, 0.06);
+}
+.avatar-initials {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-strong);
+  color: var(--body);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.turn-body { min-width: 0; }
+.turn-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 1px;
+}
+.turn-who {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.turn-at {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.turn-text {
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+/* Interim results stay grey until the transcript finalises. */
+.turn-interim .turn-text { color: var(--muted); font-style: italic; }
+
+/* Guardrail triggers, tagged inline at the turn they fired on. */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: var(--pill);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-style: normal;
+  vertical-align: 2px;
+}
+.tag-guardrail { background: var(--error-tint); color: var(--error); }
 
 /* ---------- journey form ---------- */
 
-.section { margin-bottom: 14px; }
+.section { margin-bottom: 18px; }
 .section-head {
-  display: flex; align-items: center; gap: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin-bottom: 8px;
 }
-.section-rule { flex: 1; height: 1px; background: var(--rule); }
-
-.field {
-  display: grid;
-  grid-template-columns: minmax(9ch, 15ch) 1fr auto;
-  gap: 10px;
-  align-items: baseline;
-  padding: 4px 10px;
-  margin-bottom: 2px;
-  border-left: 2px solid var(--st-empty);
-  background: var(--panel-2);
-  border-radius: 0 var(--radius) var(--radius) 0;
-  cursor: pointer;
-  transition: background 120ms ease;
+.section-rule { flex: 1; height: 1px; background: var(--hairline); }
+.section-count {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
-.field:hover { background: #202c40; }
-.field:focus-visible { outline: 2px solid var(--st-prefilled); outline-offset: 1px; }
+/* The section the agent is in right now is the one written in ink. */
+.section-active .label { color: var(--ink); }
+.section-active .section-rule { background: var(--hairline-strong); }
 
-.field-label { font-family: var(--font-cond), sans-serif; text-transform: uppercase; letter-spacing: 0.06em; font-size: 10px; color: var(--ink-faint); }
-/* The value sits immediately after its label instead of against the far edge of
-   the row. Right-aligned, a name rendered 362px from the label it belongs to,
-   which is a long association to carry across a projected panel. The fixed
-   label column still gives every value a common left edge to scan down. */
-.field-value { font-size: 13px; color: var(--ink); word-break: break-word; text-align: left; padding-right: 10px; }
-.field-value:empty::before { content: "-"; color: var(--st-empty); }
+/* One row per field. The state is carried by a short bar at the left edge and
+   the colour of the value, so the seven states read down the column without
+   a legend. */
+.field {
+  --state-line: var(--hairline-strong);
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(9ch, 14ch) 1fr auto;
+  gap: 12px;
+  align-items: baseline;
+  padding: 7px 12px 7px 18px;
+  margin-bottom: 3px;
+  border-radius: var(--radius-md);
+  background: var(--row);
+  cursor: pointer;
+  transition: background 160ms ease;
+}
+.field::before {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--state-line);
+}
+.field:hover { background: var(--surface-strong); }
+.field[aria-pressed="true"] { box-shadow: inset 0 0 0 1px var(--hairline-strong); }
+.field:focus-visible { outline-offset: 0; }
+
+.field-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted);
+}
+/* The value sits immediately after its label instead of against the far edge
+   of the row: a name rendered 360px from the label it belongs to is a long
+   association to carry across a projected panel. The fixed label column still
+   gives every value a common left edge to scan down. */
+.field-value {
+  font-size: 14px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.field-value:empty::before { content: "-"; color: var(--muted-soft); }
 /* The confidence figure is called out loud during the demo, so it has to be
    legible off a projector rather than tucked away as metadata. */
-.field-conf { font-size: 11px; color: var(--ink-dim); font-variant-numeric: tabular-nums; min-width: 4ch; text-align: right; }
+.field-conf {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 4ch;
+  text-align: right;
+}
 
-.f-empty     { border-left-color: var(--st-empty); }
-.f-prefilled { border-left-color: var(--st-prefilled); }
-.f-prefilled .field-value { color: var(--st-prefilled); }
-.f-asking    { border-left-color: var(--st-asking); animation: breathe 1.4s ease-in-out infinite; }
-.f-captured  { border-left-color: var(--st-captured); }
-.f-captured .field-value { color: var(--st-captured); }
-.f-confirmed { border-left-color: var(--st-confirmed); }
-.f-confirmed .field-value { color: var(--st-confirmed); }
-.f-submitted { border-left-color: var(--st-submitted); background: rgba(62, 207, 142, 0.08); }
-.f-redacted  { border-left-color: var(--st-redacted); }
-.f-redacted .field-value { color: var(--st-redacted); text-decoration: line-through; }
+.f-prefilled { --state-line: var(--info-line); }
+.f-prefilled .field-value { color: var(--info); }
+.f-asking    { --state-line: var(--warn-line); animation: breathe 1.4s ease-in-out infinite; }
+.f-captured  { --state-line: var(--warn-line); }
+.f-captured .field-value { color: var(--warn); }
+.f-confirmed { --state-line: var(--success-line); }
+.f-confirmed .field-value { color: var(--success); }
+.f-submitted { --state-line: var(--success-line); background: var(--success-tint); }
+.f-submitted .field-value { color: var(--success); }
+.f-redacted  { --state-line: var(--error-line); }
+.f-redacted .field-value { color: var(--error); text-decoration: line-through; }
 
 @keyframes breathe {
-  0%, 100% { background: var(--panel-2); }
-  50%      { background: rgba(240, 169, 59, 0.14); }
+  0%, 100% { background: var(--row); }
+  50%      { background: var(--warn-tint); }
 }
 
 /* ---------- escalation ----------
-   The signature element: six lanes, one per signal, each filling as
-   pressure builds. Judges see the meter climb two turns before the
-   handoff fires, which is the point of the robustness criterion. */
+   Six lanes, one per signal, each filling as pressure builds. Judges see the
+   meter climb two turns before the handoff fires, which is the point of the
+   robustness criterion. Amber while it builds, rose once it has fired. */
 
-.meter { margin-bottom: 11px; }
-.meter-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
-.meter-name { font-family: var(--font-cond), sans-serif; text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; font-weight: 600; color: var(--ink-dim); }
-.meter-score { font-size: 10px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.meter { margin-bottom: 13px; }
+.meter-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 5px;
+}
+.meter-name {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.meter-score {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
 
 .lane {
   position: relative;
-  /* The escalation lanes are the signature panel, and at 5px they carried less
-     weight on screen than the rules drawn between sections. */
   height: 8px;
-  background: #1f2a40;
-  border: 1px solid var(--rule);
-  border-radius: 3px;
+  background: var(--surface-strong);
+  border-radius: var(--pill);
   overflow: hidden;
 }
 .lane-fill {
   position: absolute;
   inset: 0 auto 0 0;
-  background: var(--st-asking);
+  background: var(--warn-line);
+  border-radius: var(--pill);
   transition: width 260ms ease;
 }
-.lane-fired .lane-fill { background: var(--alarm); }
-.meter-fired .meter-name { color: var(--alarm); }
-.meter-evidence { font-size: 10px; color: var(--ink-faint); margin-top: 3px; }
+.lane-fired .lane-fill { background: var(--error-line); }
+.meter-fired .meter-name { color: var(--error); }
+.meter-fired .meter-score { color: var(--error); font-weight: 600; }
+.meter-evidence {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
 
 .sentiment {
   position: relative;
   height: 6px;
-  background: var(--rule-soft);
-  border-radius: 3px;
-  margin: 6px 0 14px;
+  background: var(--surface-strong);
+  border-radius: var(--pill);
+  margin: 8px 0 18px;
 }
 /* Centre tick marks neutral, so a negative reading reads as a direction. */
 .sentiment::after {
-  content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px;
-  width: 1px; background: var(--ink-faint);
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -4px;
+  bottom: -4px;
+  width: 1px;
+  background: var(--hairline-strong);
 }
 .sentiment-needle {
-  position: absolute; top: -3px; width: 2px; height: 12px;
-  background: var(--ink); border-radius: 1px;
+  position: absolute;
+  top: -4px;
+  width: 3px;
+  height: 14px;
+  background: var(--ink);
+  border-radius: 2px;
   transition: left 260ms ease;
 }
 
 .handoff-banner {
-  border: 1px solid var(--alarm);
-  border-radius: var(--radius);
-  padding: 10px 12px;
-  margin-bottom: 14px;
-  color: var(--alarm);
-  background: rgba(255, 92, 92, 0.08);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  background: var(--error-tint);
+  color: var(--error);
 }
 .handoff-banner .label { color: inherit; }
-.banner-evidence { margin-top: 4px; }
-.script-pos-head { margin-top: 20px; }
-.script-pos { color: var(--ink-dim); }
+.banner-evidence { margin-top: 4px; color: var(--ink); }
+.script-pos-head { margin-top: 22px; }
+.script-pos { color: var(--body); }
 
 /* ---------- payload drawer ---------- */
 
 .drawer {
-  background: var(--panel-2);
-  border-top: 1px solid var(--rule);
   flex: 0 0 auto;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-xl);
 }
 .drawer-head {
-  display: flex; align-items: center; gap: 12px;
-  padding: 8px 16px;
-  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 14px;
   width: 100%;
-  background: none; border: 0; color: inherit; font: inherit;
+  padding: 12px 20px;
+  border: 0;
+  border-radius: var(--radius-xl);
+  background: none;
+  color: inherit;
+  font: inherit;
   text-align: left;
+  cursor: pointer;
+}
+.drawer-head:focus-visible { outline-offset: -2px; }
+.drawer-toggle {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
 }
 .drawer-body {
-  max-height: 210px; overflow: auto;
-  padding: 0 16px 12px;
-  font-size: 11px;
-  color: var(--ink-dim);
+  max-height: 220px;
+  overflow: auto;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--hairline-soft);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  letter-spacing: 0;
+  color: var(--body);
   white-space: pre;
 }
-.drawer-ok { color: var(--st-confirmed); }
-.drawer-err { color: var(--alarm); }
+.drawer-err { color: var(--error); }
 
 /* ---------- handoff console ---------- */
 
 .handoff {
-  max-width: 1000px;
+  position: relative;
+  z-index: 1;
+  max-width: 1040px;
   margin: 0 auto;
-  padding: 28px var(--gutter) 60px;
+  padding: 36px var(--gutter) 64px;
+}
+.handoff-title {
+  margin: 6px 0 22px;
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: 36px;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  color: var(--ink);
 }
 .handoff-reason {
-  border: 1px solid var(--alarm);
-  border-left-width: 3px;
-  border-radius: var(--radius);
-  padding: 16px 18px;
-  margin-bottom: 22px;
-  background: rgba(255, 92, 92, 0.07);
+  border-radius: var(--radius-xl);
+  padding: 18px 20px;
+  margin-bottom: 16px;
+  background: var(--error-tint);
+  color: var(--error);
+}
+.handoff-reason .label { color: inherit; }
+/* The line that tripped the detector is the first thing the human reads, so
+   it is set like a headline rather than like a log line. */
+.handoff-evidence {
+  margin-top: 8px;
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: 22px;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.handoff-elapsed {
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--muted);
 }
 .handoff-continue {
-  border: 1px solid var(--st-confirmed);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   padding: 12px 16px;
-  color: var(--st-confirmed);
-  margin-bottom: 22px;
+  margin-bottom: 20px;
+  background: var(--success-tint);
+  color: var(--success);
+  font-weight: 500;
 }
-.handoff-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.handoff-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  /* Each card hugs its own content; the recap is five lines, the form is
+     seventeen rows, and a stretched recap card is mostly empty white. */
+  align-items: start;
+}
 
-.handoff-title { margin: 4px 0 20px; }
-.handoff-reason .label { color: inherit; }
-.handoff-evidence { font-size: 15px; margin-top: 6px; }
-.handoff-elapsed { margin-top: 8px; }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-xl);
+  padding: 18px 20px;
+}
 
 /* Before a transfer fires this screen has nothing to show, which is the normal
    case - it sits open on a second laptop, waiting. Framed so it reads as ready
    rather than as a page that failed to load. */
 .handoff-idle {
-  border: 1px dashed var(--rule);
-  border-radius: var(--radius);
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--radius-xl);
   padding: 20px 22px;
   max-width: 60ch;
-  color: var(--ink-dim);
+  color: var(--body);
+  background: var(--surface);
 }
-.handoff-idle code { color: var(--ink); }
-
-.empty {
-  color: var(--ink-faint);
-  padding: 24px 0;
-  max-width: 44ch;
+.handoff-idle code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--surface-strong);
+  padding: 1px 6px;
+  border-radius: 4px;
 }
 
 /* ---------- responsive ----------
-   The console targets a 1440px projector, but the handoff view gets
-   opened on whatever laptop is nearest, so it has to hold up narrow. */
+   The console targets a 1440px projector, but the handoff view gets opened on
+   whatever laptop is nearest, so it has to hold up narrow. */
 @media (max-width: 1100px) {
-  .panes { grid-template-columns: 1fr; grid-template-rows: auto auto auto; }
   .console { height: auto; min-height: 100vh; }
+  .nav { flex-wrap: wrap; height: auto; padding: 12px 0; }
+  .callhead { flex-wrap: wrap; }
+  .stats { margin-left: 0; gap: 24px; width: 100%; }
+  .panes { grid-template-columns: 1fr; }
   .pane-body { max-height: 46vh; }
   .handoff-grid { grid-template-columns: 1fr; }
-  .bar { flex-wrap: wrap; gap: 12px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

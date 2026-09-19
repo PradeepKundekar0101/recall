@@ -1,24 +1,34 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Mono, IBM_Plex_Sans_Condensed } from "next/font/google";
+import { Geist, Geist_Mono, Inter } from "next/font/google";
 import "./globals.css";
 
 /**
- * One superfamily, two roles. Plex Mono carries every value on screen, because
- * every value on screen is telemetry off a live line; Plex Sans Condensed carries
- * labels and headers, condensed so a dense panel still reads from the back of the
- * room it is projected in.
+ * Three faces, three jobs, after apps/web/DESIGN.md.
+ *
+ * Geist at 300 carries the one large line on screen - the person on the other
+ * end of the call - in the light grotesque voice of Waldenburg, the ElevenLabs
+ * display face it stands in for (Waldenburg is licensed, so it is not shipped).
+ * Inter carries everything that is read: labels, values, the transcript. Geist
+ * Mono carries the sandbox payload, which is code.
  */
-const mono = IBM_Plex_Mono({
+const display = Geist({
   subsets: ["latin"],
-  weight: ["400", "500", "600"],
-  variable: "--font-mono",
+  weight: ["300", "400"],
+  variable: "--font-geist",
   display: "swap",
 });
 
-const condensed = IBM_Plex_Sans_Condensed({
+const sans = Inter({
   subsets: ["latin"],
-  weight: ["500", "600", "700"],
-  variable: "--font-cond",
+  weight: ["400", "500", "600"],
+  variable: "--font-inter",
+  display: "swap",
+});
+
+const mono = Geist_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-geist-mono",
   display: "swap",
 });
 
@@ -29,7 +39,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en-AU" className={`${mono.variable} ${condensed.variable}`}>
+    <html lang="en-AU" className={`${display.variable} ${sans.variable} ${mono.variable}`}>
       <body>{children}</body>
     </html>
   );

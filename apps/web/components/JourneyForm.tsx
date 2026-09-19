@@ -14,11 +14,14 @@ export function JourneyForm({
   form,
   onSelect,
   selected,
+  activeSection,
 }: {
   journey: Journey | null;
   form: FormState;
   onSelect?: (fieldId: string) => void;
   selected?: string | null;
+  /** The section the agent is asking about right now, written in ink. */
+  activeSection?: string | null;
 }) {
   if (!journey) return <p className="empty">Waiting for the journey config.</p>;
 
@@ -26,11 +29,21 @@ export function JourneyForm({
     <>
       {journey.sections.map((section) => {
         const fields = journey.fields.filter((f) => f.section === section.id);
+        // A field is done once the customer has said yes to it. Captured and
+        // prefilled values are still waiting on that yes.
+        const done = fields.filter((f) => {
+          const state = form[f.id]?.state;
+          return state === "confirmed" || state === "submitted";
+        }).length;
+        const active = activeSection === section.id;
         return (
-          <div className="section" key={section.id}>
+          <div className={`section${active ? " section-active" : ""}`} key={section.id}>
             <div className="section-head">
               <span className="label">{section.title}</span>
               <span className="section-rule" />
+              <span className="section-count">
+                {done} of {fields.length}
+              </span>
             </div>
 
             {fields.map((field) => {
