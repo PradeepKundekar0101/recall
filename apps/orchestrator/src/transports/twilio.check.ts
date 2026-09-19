@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { WebSocket } from "ws";
+import type { SttEvents, SttOpener } from "../voice/stt/types.js";
 
 /**
  * `pnpm transport:check` - the Twilio transport against a fake Twilio and a
@@ -40,10 +41,39 @@ class FakeMediaStream extends EventEmitter {
   readyState = 1;
   send(data: string): void {
     this.sent.push(String(data));
+    // Twilio acks a mark once the audio in front of it has played out. Without
+    // that ack here, every speak() in this file would sit on its ceiling timer.
+    const msg = JSON.parse(String(data)) as { event: string; mark?: { name: string } };
+    if (msg.event === "mark" && msg.mark) {
+      const { name } = msg.mark;
+      setImmediate(() => this.emit("message", JSON.stringify({ event: "mark", mark: { name } })));
+    }
+  }
+
+  /** Outbound audio frames, which is what "the customer can still hear us" means. */
+  get mediaFrames(): number {
+    return this.sent.filter((s) => s.includes('"event":"media"')).length;
   }
   close(): void {
     this.emit("close");
   }
+}
+
+/**
+ * A transcriber the check drives by hand, so a turn can be put on the line
+ * without a phone, a socket or a vendor.
+ */
+function fakeStt() {
+  let events: SttEvents = {};
+  const open: SttOpener = async (opts) => {
+    events = opts.events;
+    return { push: () => {}, flush: () => {}, close: () => {}, ready: true };
+  };
+  return {
+    open,
+    /** The customer says something, and it commits. */
+    say: (text: string, confidence = 0.9) => events.onFinal?.(text, confidence),
+  };
 }
 
 type Update = { sid: string; twiml?: string; status?: string };
@@ -72,9 +102,9 @@ const journey = loadJourney();
 const lead = loadLeads()[0]!;
 
 /** Dials, attaches a fake media stream, and waits for the transport to be live. */
-async function connect(callId: string) {
+async function connect(callId: string, openStt?: SttOpener) {
   const twilio = fakeTwilio();
-  const transport = new TwilioTransport({ journey, lead, callId, client: twilio.client });
+  const transport = new TwilioTransport({ journey, lead, callId, client: twilio.client, openStt });
   const started = transport.start();
   await sleep(20);
   const stream = new FakeMediaStream();
@@ -115,6 +145,60 @@ console.log("\n-- warm transfer");
   const before = twilio.updates.length;
   await transport.hangup();
   check("hangup after a transfer leaves the call alone", !twilio.updates.slice(before).some((u) => u.status === "completed"), JSON.stringify(twilio.updates.slice(before)));
+}
+
+console.log("\n-- answering-machine detection is advisory");
+{
+  // The third journey call: Twilio's async AMD returned machine_start six
+  // seconds after answer, while the opener was still playing to a live human,
+  // and the webhook hung the call up one second later. Twice in one session.
+  const stt = fakeStt();
+  const { transport, twilio, stream } = await connect("check-amd", stt.open);
+  let ended: string | null = null;
+  transport.onEnded((reason) => {
+    ended = reason;
+  });
+
+  await transport.speak("Hi, is this Priya?");
+  stt.say("Yeah, speaking.");
+  await sleep(10);
+
+  const before = twilio.updates.length;
+  const framesBefore = stream.mediaFrames;
+  transport.notifyAmd("machine_start");
+  await sleep(20);
+
+  check("a machine verdict does not end a call in progress", ended === null, String(ended));
+  check(
+    "a machine verdict does not complete the call at Twilio",
+    !twilio.updates.slice(before).some((u) => u.status === "completed"),
+    JSON.stringify(twilio.updates.slice(before))
+  );
+  check("the verdict is recorded for the outcome", transport.amdVerdict === "machine_start", String(transport.amdVerdict));
+
+  await transport.speak("Is now a good time?");
+  check("the agent can still be heard after the verdict", stream.mediaFrames > framesBefore);
+}
+
+{
+  // The same verdict before anyone has said a word. A machine that has been
+  // talking for six seconds and a customer holding the handset in silence are
+  // indistinguishable from here, so this one does not end the call either -
+  // the silence nudges and the abandon timer close a voicemail.
+  const stt = fakeStt();
+  const { transport, twilio } = await connect("check-amd-silent", stt.open);
+  let ended: string | null = null;
+  transport.onEnded((reason) => {
+    ended = reason;
+  });
+  transport.notifyAmd("machine_start");
+  await sleep(20);
+  check("a machine verdict on a silent line does not end the call either", ended === null, String(ended));
+  check(
+    "nothing is completed at Twilio",
+    !twilio.updates.some((u) => u.status === "completed"),
+    JSON.stringify(twilio.updates)
+  );
 }
 
 console.log(failures ? `\n${failures} failure(s).` : "\nAll transport checks pass.");

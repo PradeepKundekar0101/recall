@@ -3,6 +3,7 @@ import twilio from "twilio";
 import { env } from "../env.js";
 import { log } from "../log.js";
 import { openStt, type SttSession } from "../voice/stt.js";
+import type { SttOpener } from "../voice/stt/types.js";
 import { synthesize } from "../voice/tts.js";
 import type { Transport, TransportDeps, TransportEndReason } from "../engine/transport.js";
 
@@ -139,7 +140,10 @@ export class TwilioTransport implements Transport {
   /** Set once the call has been handed to a human. It is theirs from then on. */
   private transferred = false;
 
-  constructor(private opts: TransportDeps & { client?: TwilioClient }) {
+  /** Twilio's async AMD verdict, once it lands. Advisory - see notifyAmd(). */
+  amdVerdict: string | null = null;
+
+  constructor(private opts: TransportDeps & { client?: TwilioClient; openStt?: SttOpener }) {
     this.id = opts.callId;
     this.streamReady = new Promise<void>((resolve) => {
       this.markStreamReady = resolve;
@@ -261,7 +265,10 @@ export class TwilioTransport implements Transport {
   }
 
   private async openStt(): Promise<void> {
-    this.stt = await openStt({
+    // Injected by `pnpm transport:check`, which has no vendor socket to open and
+    // needs to put a turn on the line by hand.
+    const open = this.opts.openStt ?? openStt;
+    this.stt = await open({
       label: `stt/${this.id.slice(0, 8)}`,
       keywords: recognitionKeywords(this.opts),
       events: {
@@ -530,10 +537,37 @@ export class TwilioTransport implements Transport {
     this.playbackEndedAt = Date.now();
   }
 
-  /** Called by the AMD webhook. */
-  notifyVoicemail(): void {
-    log.call(this.id, "AMD: machine");
-    this.end("voicemail");
+  /**
+   * Twilio's async answering-machine verdict. Recorded, never acted on.
+   *
+   * It used to end the call, and on the third journey call it ended two of them.
+   * Twilio posted `machine_start` six seconds after answer - while the opener
+   * was still playing to a live human who had already been transcribed - and
+   * the hangup followed one second later. From the customer's side the agent
+   * greeted them by name, heard them answer, and cut the line.
+   *
+   * The verdict cannot be trusted here, because this agent talks. Detection
+   * runs on the called leg for up to `machine_detection_timeout` while our own
+   * opener is playing into it, and anything continuous past Twilio's 2400 ms
+   * speech threshold reads as a machine greeting - the customer talking over a
+   * long opener, or that opener leaking back off their handset. Both real
+   * verdicts landed at 5.4-6.2 s of detection, mid-conversation.
+   *
+   * So AMD stops being a control and becomes a note on the record. A machine
+   * that talks at us and a customer who does are told apart by the thing that
+   * already tells them apart: nobody answers the consent question, the two
+   * silence nudges go unanswered, and the abandon timer closes the call. That
+   * costs about twenty seconds against a voicemail. Cutting off a live
+   * customer mid-sentence costs the call.
+   */
+  notifyAmd(answeredBy: string): void {
+    this.amdVerdict = answeredBy || null;
+    log.call(
+      this.id,
+      answeredBy.startsWith("machine")
+        ? `AMD: ${answeredBy} - advisory only, the call continues`
+        : `AMD: ${answeredBy || "no verdict"}`
+    );
   }
 
   notifyStatus(status: string): void {

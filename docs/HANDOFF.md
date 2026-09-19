@@ -1,7 +1,7 @@
 # RECALL - session handoff
 
 Written 19 Sep 2026, after the first successful live phone call.
-Updated the same night, after the first and second journey calls over a real phone.
+Updated the same night, after the first and second journey calls over a real phone, and again the next morning after the third and fourth.
 Next task: **run the Energy journey over a real call again, and let the handoff ring the second handset.**
 
 ## Where things stand
@@ -14,10 +14,11 @@ The full journey works in simulation against live models: a cooperative call sub
 That was 13 of 15 until a customer restating a prefilled value stopped counting as hands-free; the field came from the web journey, so it should not have.
 All ten eval personas pass (gate is 9/10), though the suite is not fully deterministic - see Known flakiness.
 
-**The journey has now been run over a real phone twice.**
+**The journey has now been run over a real phone four times.**
 The first call (3f927a21, 01:55 IST) failed on a line full of static and handed off with nothing captured.
 The second (35fbec5a, 02:47 IST) ran cleanly through name, date of birth, account holder, phone and a corrected email, then fell over at the street address and "got cut" when the handoff fired.
-Both calls are dissected below, and every defect they exposed is fixed and checked.
+The third and fourth (07:50 and 07:52 IST) were both cut about eight seconds in by Twilio's answering-machine detection, mid-answer.
+All four are dissected below, and every defect they exposed is fixed and checked.
 The warm transfer has still never rung the second handset; that is the next thing to see.
 
 ## Run it
@@ -49,7 +50,7 @@ Trust that field rather than the 201.
 | `pnpm normalise:check` | Dates, digits, emails, enums, and how each value is read back. Milliseconds, no network |
 | `pnpm dialogue:check` | The engine's turn logic against a fake line: prefilled values confirmed rather than asked, the second attempt heard before CONFUSION fires, nudges held while the customer talks. No vendors |
 | `pnpm tts:check` | mulaw round-trip and loudness levelling. Milliseconds, no network |
-| `pnpm transport:check` | The Twilio transport against a fake Twilio and a fake media stream: dial, handshake, transfer, and the hangup that must not follow it. Rings nothing |
+| `pnpm transport:check` | The Twilio transport against a fake Twilio and a fake media stream: dial, handshake, transfer, the hangup that must not follow it, and the answering-machine verdict that must not end a live call. Rings nothing |
 | `pnpm eval` | Ten simulator personas end to end |
 | `pnpm voice:calibrate` | Confidence distribution, clean vs degraded |
 | `pnpm voice:replay <wav>` | A Twilio recording back through the live STT socket, paced like the media stream. Separates a bad line from a bad transcriber |
@@ -115,6 +116,13 @@ Spacing every digit run before synthesis turned the year in every date read-back
 Every transfer was therefore refused, the fallback hung up, and the customer heard the call cut.
 `assertHandoffNumber()` now allows the configured handset and refuses the customer's own number.
 And `finalise()` calls `hangup()` after `transfer()`, which would complete the call before the Dial had rung anyone; the transport ignores a hangup once it has transferred.
+
+**Twilio's answering-machine detection hangs up on live customers.**
+`machineDetection: "Enable"` with `asyncAmd` posts a verdict while the call is already in progress, and the webhook used to end the call on `machine_start`.
+Detection runs on the called leg for up to `machine_detection_timeout` *while our own opener is playing into it*, and anything continuous past Twilio's 2400 ms speech threshold reads as a machine greeting - the customer talking over a long opener, or that opener leaking back off their handset.
+Two calls in one session died this way, both at 5.4-6.2 s of detection, mid-conversation.
+`notifyAmd()` now records the verdict and never acts on it; a voicemail is closed by the silence nudges and the abandon timer instead, about twenty seconds in.
+Covered by `pnpm transport:check`.
 
 **Never run a transport check without the injected client.**
 The first draft of `transport:check` reached the real Twilio SDK and rang the test handset.
@@ -187,6 +195,21 @@ Then the street address, and four more things went wrong, each now fixed and che
 
 Also fixed from this call: a bare "Okay." to a confirmation no longer goes to the model, so the "Okay." / "Right." / next-question rhythm is gone from prefilled confirmations.
 
+## The third journey call
+
+Two calls, 07:50 and 07:52 IST, both cut about eight seconds in.
+What the customer heard: the opener naming them, their own answer going through - the transcript is on the record - and then the line dropping.
+
+Twilio's own call log has the whole sequence.
+On `CAf5883512` the call was answered at 02:20:22 UTC, the async AMD verdict `machine_start` arrived at 02:20:28, and the orchestrator POSTed `status=completed` at 02:20:29.
+On `CA4fdd84ec` the same three events land at 02:20:50, 02:20:54 and 02:20:54.
+`machine_detection_duration` was 6139 ms and 6158 ms: AMD spent six seconds listening to a conversation and called it an answering machine.
+The one call in that session AMD scored `human` (`CA424bb22d`, verdict at 5399 ms) ran 46 s and ended normally.
+
+The chain was `/twilio/amd/:callId` -> `notifyVoicemail()` -> `end("voicemail")` -> the engine finalising as `no_answer` -> `hangup()`, which is the `status=completed` in the log one second behind every verdict.
+AMD is advisory now - see Gotchas.
+The other short calls in that session show no AMD hangup and no orchestrator update; they look like redials and hangups from this end, so watch for them separately if a call still cuts.
+
 ## What to watch on the next journey call
 
 - Does the consent gate fire before any field is asked, and is the disclosure audible at the top.
@@ -197,6 +220,7 @@ Also fixed from this call: a bare "Okay." to a confirmation no longer goes to th
 - Does the console fill live at `localhost:3000`.
 - Echo: the agent hearing itself. On speakerphone this leaked through the token-overlap defence on one turn. Try a handset.
 - Do the prefilled fields land as one yes each: name, date of birth, phone and email should all be confirmations now.
+- Does `AMD: machine_start - advisory only, the call continues` appear in the log, and does the call carry on regardless.
 - Does `inbound audio stalled` appear in the orchestrator log. If it does, the tunnel is the next suspect, not Scribe.
 - Do the customer's confidences look like the echo call (0.5 to 1.0) or like the first journey call (0.2 to 0.3). The second means the line, and the fix is the handset, not the code.
 

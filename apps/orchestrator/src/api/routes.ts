@@ -167,7 +167,7 @@ api.all("/twilio/whisper", (req, res) => {
 
 api.post("/twilio/amd/:callId", (req, res) => {
   const transport = liveTwilioTransports.get(req.params.callId);
-  if (req.body?.AnsweredBy?.startsWith("machine")) transport?.notifyVoicemail();
+  transport?.notifyAmd(String(req.body?.AnsweredBy ?? ""));
   res.sendStatus(204);
 });
 
