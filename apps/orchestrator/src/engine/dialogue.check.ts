@@ -305,6 +305,53 @@ console.log("\n-- a field the lead already carries is confirmed, not asked");
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n-- agreement the word list has never heard still counts");
+{
+  // "Right." only got into the yes list because a real call lost a date of
+  // birth to it, and the tail after it is endless: gotcha, spot on, bang on,
+  // you got it. Every miss costs the customer a turn on a question they
+  // already answered.
+  //
+  // The model is already called on exactly these turns - anything the code
+  // cannot resolve goes to the extractor - so it is asked the one question
+  // that matters rather than only being asked for field values.
+  const { line, engine, captured } = scenario("model-agreement", IDENTITY_AND_CONTACT, {
+    extract: async () => ({ accepted: [], rejected: [], intent: "answer" as const, agreement: "yes" as const, ms: 0, usage: null }),
+  });
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+  check("the walk reaches a read-back", /is that right/i.test(line.last()), line.last());
+
+  line.say("Bang on, mate.");
+  await line.settle();
+  check("a yes the list has never heard confirms the read-back", engine.state.form.get("full_name")?.state === "confirmed", JSON.stringify(engine.state.form.get("full_name")));
+  check("no handoff, no re-ask", captured.handoff === null && !/didn'?t catch/i.test(line.last()), `${String(captured.handoff)} ${line.last()}`);
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a whole sentence is not taken as a yes on the model's say-so");
+{
+  // The dangerous direction. A wrong "no" costs a turn; a wrong "yes" writes a
+  // value the customer may have been objecting to into an energy signup. So the
+  // model's yes only counts for a reply short enough to have been one.
+  const { line, engine } = scenario("model-agreement-long", IDENTITY_AND_CONTACT, {
+    extract: async () => ({ accepted: [], rejected: [], intent: "answer" as const, agreement: "yes" as const, ms: 0, usage: null }),
+  });
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+
+  line.say("Well that depends on which one you mean, I have moved house twice since then.");
+  await line.settle();
+  check("a long reply is not confirmed on the model's yes", engine.state.form.get("full_name")?.state !== "confirmed", JSON.stringify(engine.state.form.get("full_name")));
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
 console.log("\n-- a run of values the lead carries is confirmed in one line");
 {
   // Every prefilled field used to cost its own read-back and its own yes, so a
@@ -387,7 +434,7 @@ console.log("\n-- a yes to a read-back outranks the model's guess at intent");
   // The model's intent is already only trusted when the turn produced nothing.
   // A yes or no to the line on the wire is not nothing.
   const { line, engine, captured } = scenario("yes-outranks-intent", IDENTITY_AND_CONTACT, {
-    extract: async () => ({ accepted: [], rejected: [], intent: "question" as const, ms: 0, usage: null }),
+    extract: async () => ({ accepted: [], rejected: [], intent: "question" as const, agreement: "unclear" as const, ms: 0, usage: null }),
   });
   await engine.begin();
   line.say("Yes, now's fine.");
@@ -421,7 +468,7 @@ console.log("\n-- a number the form does not hold is asked for, not confirmed at
         ? [{ field: "phone", value: "+61412345678", confidence: 0.9, evidence: utterance, needsConfirm: true }]
         : [],
       rejected: [],
-      intent: "answer" as const,
+      intent: "answer" as const, agreement: "unclear" as const,
       ms: 0,
       usage: null,
     }),
@@ -501,7 +548,7 @@ console.log("\n-- a read-back nobody answered is said again, not thrown away");
         ? [{ field: "dob", value: "2002-09-01", confidence: 0.9, evidence: utterance, needsConfirm: true }]
         : [],
       rejected: [],
-      intent: "answer" as const,
+      intent: "answer" as const, agreement: "unclear" as const,
       ms: 0,
       usage: null,
     }),
@@ -538,7 +585,7 @@ console.log("\n-- a read-back nobody answers twice gives up and asks again");
         ? [{ field: "dob", value: "2002-09-01", confidence: 0.9, evidence: utterance, needsConfirm: true }]
         : [],
       rejected: [],
-      intent: "answer" as const,
+      intent: "answer" as const, agreement: "unclear" as const,
       ms: 0,
       usage: null,
     }),
@@ -751,7 +798,7 @@ console.log("\n-- the filler and the reply behind it do not talk over each other
     extract: async () => {
       // Slow enough for the filler to be due, quick enough to land while it plays.
       await sleep(60);
-      return { accepted: [], rejected: [], intent: "unclear" as const, ms: 60, usage: null };
+      return { accepted: [], rejected: [], intent: "unclear" as const, agreement: "unclear" as const, ms: 60, usage: null };
     },
   });
   await engine.begin();

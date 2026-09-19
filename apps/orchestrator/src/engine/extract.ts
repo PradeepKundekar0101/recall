@@ -49,9 +49,13 @@ export type RawPatch = {
   evidence: string;
 };
 
+/** What the customer said about a value read back to them, when one was. */
+export type Agreement = "yes" | "no" | "unclear";
+
 export type ExtractionResult = {
   patches: RawPatch[];
   intent: Intent;
+  agreement: Agreement;
   /** Fields the customer volunteered before being asked. Confirmed later, not re-asked. */
   unasked_fields_mentioned: string[];
 };
@@ -87,7 +91,7 @@ export function extractionTool(journey: Journey): ToolSchema {
     parameters: {
       type: "object",
       additionalProperties: false,
-      required: ["patches", "intent", "unasked_fields_mentioned"],
+      required: ["patches", "intent", "unasked_fields_mentioned", "agreement"],
       properties: {
         patches: {
           type: "array",
@@ -121,6 +125,15 @@ export function extractionTool(journey: Journey): ToolSchema {
             "question: they asked something, including about rates or which plan is better. " +
             "ask_human: they want a person. unclear: you could not tell.",
         },
+        agreement: {
+          type: "string",
+          enum: ["yes", "no", "unclear"],
+          description:
+            "Only when the agent's last line read a value back and asked the customer to confirm it. " +
+            "yes: they agreed. no: they said it was wrong. unclear: they said something else, or you " +
+            "could not tell. Say unclear unless you are sure - a wrong yes writes a value they were " +
+            "objecting to.",
+        },
         unasked_fields_mentioned: {
           type: "array",
           items: { type: "string", enum: journey.fields.map((f) => f.id) },
@@ -131,7 +144,7 @@ export function extractionTool(journey: Journey): ToolSchema {
   };
 }
 
-function systemPrompt(journey: Journey, asking: JourneyField | null): string {
+function systemPrompt(journey: Journey, asking: JourneyField | null, confirming: string | null): string {
   const lines = journey.fields.map(
     (f) =>
       `- ${f.id} (${f.type}${f.options ? `: ${f.options.join("|")}` : ""})${f.required ? " [required]" : ""}: ${f.label}`
@@ -143,6 +156,9 @@ function systemPrompt(journey: Journey, asking: JourneyField | null): string {
     ...lines,
     "",
     asking ? `The agent just asked for: ${asking.id} (${asking.label}).` : "The agent has not asked for a field yet.",
+    confirming
+      ? `The agent's last line read a value back for confirmation: "${confirming}" - so decide agreement.`
+      : "Nothing is waiting to be confirmed, so agreement is unclear.",
     "",
     "Rules:",
     "- Record a field only when the customer gave a value for it in this turn.",
@@ -150,6 +166,9 @@ function systemPrompt(journey: Journey, asking: JourneyField | null): string {
     "- Report the value verbatim. Normalisation happens downstream.",
     "- If they asked about rates, savings, or which plan is better, intent is question.",
     "- If you could not make out what they said, intent is unclear and patches is empty.",
+    "- Agreement is about the read-back only. With nothing being confirmed, it is unclear.",
+    "- Disagreeing and giving the right value are one turn, not two: \"no, it's the 1st of September\"",
+    "  is agreement no AND a patch. Record the value either way.",
   ].join("\n");
 }
 
@@ -166,20 +185,23 @@ export async function extract(opts: {
   utterance: string;
   asking: JourneyField | null;
   sttConfidence: number | null;
+  /** The read-back on the line, when one is waiting to be answered. */
+  confirming?: string | null;
 }): Promise<{
   accepted: AcceptedPatch[];
   rejected: RejectedPatch[];
   intent: Intent;
+  agreement: Agreement;
   ms: number;
   usage: TokenUsage | null;
 }> {
   const { journey, utterance, asking } = opts;
 
   const { value, ms, usage } = await toolCall<ExtractionResult>({
-    system: systemPrompt(journey, asking),
+    system: systemPrompt(journey, asking, opts.confirming ?? null),
     user: utterance,
     tool: extractionTool(journey),
-    mock: { patches: [], intent: "unclear", unasked_fields_mentioned: [] },
+    mock: { patches: [], intent: "unclear", agreement: "unclear", unasked_fields_mentioned: [] },
   });
 
   const accepted: AcceptedPatch[] = [];
@@ -249,7 +271,14 @@ export async function extract(opts: {
   // question they will find strange.
   inferState(journey, accepted);
 
-  return { accepted, rejected, intent: value.intent ?? "unclear", ms, usage };
+  return {
+    accepted,
+    rejected,
+    intent: value.intent ?? "unclear",
+    agreement: opts.confirming ? (value.agreement ?? "unclear") : "unclear",
+    ms,
+    usage,
+  };
 }
 
 /**

@@ -7,7 +7,7 @@ import { streamSentences } from "../voice/llm.js";
 import { JourneyState } from "./journey-state.js";
 import type { Form } from "./fact-bus.js";
 import { EscalationDetector, angerPatternMatched, looksLikeDontKnow, redactDigits, ruleIntent, type SignalReading } from "./escalation.js";
-import { extract } from "./extract.js";
+import { extract, type Agreement } from "./extract.js";
 import { normalise, normaliseBool, speakableValue } from "./normalise.js";
 import { submitFinal, submitSection } from "../sandbox/submit.js";
 import type { AudioMeta, SpeakResult, Transport, TransportEndReason } from "./transport.js";
@@ -384,13 +384,16 @@ export class DialogueEngine {
 
     const [extraction, readings] = await Promise.all([
       resolvableInCode
-        ? Promise.resolve({ accepted: [], rejected: [], intent: "answer" as const, ms: 0, usage: null })
+        ? Promise.resolve({ accepted: [], rejected: [], intent: "answer" as const, agreement: "unclear" as const, ms: 0, usage: null })
         : this.extractor({
             journey: this.state.journey,
             form: this.state.form,
             utterance: text,
             asking,
             sttConfidence: confidence,
+            // What is on the line, so the model can be asked the question that
+            // is actually being asked rather than only for field values.
+            confirming: this.state.awaitingConfirm.length ? this.lastQuestion : null,
           }),
       this.detector.evaluate({
         // Raw, not redacted: this is the only consumer that needs the digits.
@@ -580,7 +583,7 @@ export class DialogueEngine {
     if (this.state.awaitingConfirm.length) {
       const pending = this.state.awaitingConfirm;
       const fieldId = pending[0] as string;
-      const said = normaliseBool(text);
+      const said = normaliseBool(text) ?? modelAgreement(text, extraction.agreement);
       const patch = extraction.accepted.find((p) => pending.includes(p.field));
       // Said over the line before the read-back: only a value for the field
       // being read back means anything, and the read-back stands otherwise.
@@ -1318,6 +1321,29 @@ export class DialogueEngine {
   get isFinalised(): boolean {
     return this.finalised;
   }
+}
+
+/**
+ * What the model made of a reply the word list could not place.
+ *
+ * The list will never be finished. "Right." only got into it because a real call
+ * lost a date of birth to it, and gotcha, spot on, bang on and you got it were
+ * all waiting behind. The model is already called on exactly these turns -
+ * anything the code cannot resolve goes to the extractor - so it is asked the
+ * question that is actually on the line instead of only for field values.
+ *
+ * The two directions are not equally safe. A wrong "no" costs a turn and a
+ * re-ask; a wrong "yes" writes a value the customer may have been objecting to
+ * into an energy signup. So a "no" is taken as it comes, and a "yes" only counts
+ * for a reply short enough to have been one, with no digits in it - a sentence
+ * or a number is a correction we failed to make out, and that path already ends
+ * in asking them properly.
+ */
+function modelAgreement(text: string, agreement: Agreement): boolean | null {
+  if (agreement === "no") return false;
+  if (agreement !== "yes") return null;
+  if (wordCount(text) > 5 || /\d/.test(text)) return null;
+  return true;
 }
 
 /** Whether a field's confirmation line reads its value out, rather than asking something. */
