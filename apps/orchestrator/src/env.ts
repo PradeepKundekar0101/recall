@@ -132,6 +132,14 @@ export const env = {
    */
   fillerAfterMs: num("FILLER_AFTER_MS", 400),
 
+  /**
+   * How long a committed transcript that stops mid-thought ("Uh, it's-") is
+   * held for the rest of the sentence before being taken as the whole answer.
+   * Scribe's VAD floor is half a second and people pause longer than that in
+   * the middle of an address.
+   */
+  fragmentHoldMs: num("FRAGMENT_HOLD_MS", 2500),
+
   /** Silence on an open question: nudge, nudge again, then close as abandoned. */
   silenceNudgeMs: num("SILENCE_NUDGE_MS", 6000),
   silenceSecondNudgeMs: num("SILENCE_SECOND_NUDGE_MS", 12000),

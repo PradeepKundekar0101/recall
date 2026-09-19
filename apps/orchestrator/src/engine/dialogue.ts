@@ -1,4 +1,4 @@
-import type { CallOutcome, EscalationSignal, Journey, JourneyField, Lead } from "@recall/shared";
+import type { CallOutcome, EscalationSignal, FieldValue, Journey, JourneyField, Lead } from "@recall/shared";
 import { env } from "../env.js";
 import { log } from "../log.js";
 import { spellOut } from "../voice/tts.js";
@@ -63,6 +63,12 @@ export class DialogueEngine {
   private finalised = false;
   private busy = false;
 
+  /** The last thing the customer was asked, for "can you say that again?". */
+  private lastQuestion: string | null = null;
+  /** A committed transcript that stopped mid-thought, waiting for the rest. */
+  private fragment: { text: string; confidence: number | null } | null = null;
+  private fragmentTimer: NodeJS.Timeout | null = null;
+
   constructor(
     readonly callId: string,
     journey: Journey,
@@ -81,7 +87,14 @@ export class DialogueEngine {
       if (after.state === "confirmed") this.hooks.persistField(field);
     });
 
-    transport.onPartial((text) => this.hooks.onPartial("customer", text));
+    transport.onPartial((text) => {
+      this.hooks.onPartial("customer", text);
+      // A partial is the customer talking. The silence clock restarts from here,
+      // so an answer that takes a while - an email spelled out letter by letter -
+      // is never interrupted with "are you still there?" because the STT has
+      // not committed it yet.
+      this.deferSilence();
+    });
     transport.onUtterance((text, confidence) => void this.onTranscript(text, confidence));
     transport.onBargeIn(() => this.cancelTurn("barge-in"));
     transport.onEnded((reason) => void this.onTransportEnded(reason));
@@ -103,7 +116,7 @@ export class DialogueEngine {
     // and the call was handed to a human on turn one. It also made the whole
     // suite flaky, since whether the window was hit depended on timing.
     this.state.phase = "consent";
-    await this.speak(this.state.render(scripts.opener));
+    await this.askLine(this.state.render(scripts.opener));
     this.armSilence();
   }
 
@@ -114,6 +127,43 @@ export class DialogueEngine {
    * that is already being composed.
    */
   private async onTranscript(raw: string, confidence: number | null): Promise<void> {
+    if (this.finalised || this.detector.hasFired) return;
+
+    // A commit that stops mid-thought is held for the rest of the sentence.
+    //
+    // Scribe marks a cut-off with a trailing dash, and a dangling "it's the"
+    // says the same thing. The server's VAD floor is half a second, and people
+    // pause longer than that in the middle of an address: on the second real
+    // call "Uh, it's-" was taken as the whole answer, the field was re-asked,
+    // and "HSR Layout, Bangalore" arrived after the handoff had fired.
+    if (this.fragment) {
+      const held = this.fragment;
+      this.dropFragment();
+      raw = `${held.text.replace(/[-\u2013\u2026]+$/, "")} ${raw}`;
+      confidence =
+        held.confidence === null || confidence === null
+          ? (confidence ?? held.confidence)
+          : Math.min(held.confidence, confidence);
+    } else if (looksCutOff(raw)) {
+      this.fragment = { text: raw, confidence };
+      this.fragmentTimer = setTimeout(() => {
+        const held = this.fragment;
+        this.dropFragment();
+        if (held) void this.handleTurn(held.text, held.confidence);
+      }, env.fragmentHoldMs);
+      return;
+    }
+
+    await this.handleTurn(raw, confidence);
+  }
+
+  private dropFragment(): void {
+    if (this.fragmentTimer) clearTimeout(this.fragmentTimer);
+    this.fragmentTimer = null;
+    this.fragment = null;
+  }
+
+  private async handleTurn(raw: string, confidence: number | null): Promise<void> {
     if (this.finalised || this.detector.hasFired) return;
     this.clearSilence();
     this.nudges = 0;
@@ -145,6 +195,7 @@ export class DialogueEngine {
       if (rule === "busy") return await this.callback(text);
       if (rule === "ask_human") return await this.handoff("ASKS", text);
       if (rule === "robot_check") return await this.robotCheck();
+      if (rule === "repeat") return await this.repeatQuestion();
 
       const asking = this.state.asking ? (this.state.fieldById(this.state.asking) ?? null) : null;
 
@@ -168,13 +219,27 @@ export class DialogueEngine {
        * where a customer volunteers three fields in one breath, and the whole
        * efficiency argument lives there.
        */
+      /**
+       * A short yes to a read-back, to the consent question or at the review
+       * gate is decided in code too. Sending "Okay." to the extractor bought a
+       * filler and a model round trip on every prefilled confirmation - the
+       * second real call went "Okay." / "Right." / next question, five times.
+       * A "no" still goes to the model, because it usually carries the
+       * corrected value.
+       */
+      const bareYes =
+        (this.state.awaitingConfirm.length > 0 || this.state.phase === "consent" || this.state.phase === "review") &&
+        text.length < 20 &&
+        normaliseBool(text) === true;
+
       const resolvableInCode =
-        asking?.capture === "closed" &&
-        (asking.type === "bool"
-          ? normaliseBool(text) !== null
-          : asking.type === "enum"
-            ? normalise(asking, text).ok
-            : false);
+        bareYes ||
+        (asking?.capture === "closed" &&
+          (asking.type === "bool"
+            ? normaliseBool(text) !== null
+            : asking.type === "enum"
+              ? normalise(asking, text).ok
+              : false));
 
       // Only when something slow is about to happen. A closed field resolved in
       // code answers in single-digit milliseconds, and a filler in front of that
@@ -326,14 +391,14 @@ export class DialogueEngine {
         this.state.phase = "section";
         return this.speak("No problem - which part should I change?");
       }
-      return this.speak(this.state.render(this.state.journey.scripts.review));
+      return this.askLine(this.state.render(this.state.journey.scripts.review));
     }
 
     if (this.state.phase === "consent") {
       const said = normaliseBool(text);
       if (said === false) return this.decline();
       if (said !== true) {
-        await this.speak(this.state.render(scripts.opener));
+        await this.askLine(this.state.render(scripts.opener));
         return;
       }
       this.grantConsent();
@@ -359,13 +424,21 @@ export class DialogueEngine {
       // and re-asking makes the agent look like it was not listening.
       const patch = extraction.accepted.find((p) => p.field === fieldId);
       if (patch) {
+        // Saying the value back instead of "yes" is a yes.
+        if (sameValue(patch.value, this.state.form.get(fieldId)?.value)) {
+          for (const id of pending) this.state.form.set(id, { state: "confirmed" });
+          return this.askNext();
+        }
+        // A different value, heard by voice, gets its own read-back before it
+        // counts. The second real call wrote a garbled correction straight
+        // into the form with no read-back at all.
         this.state.form.set(fieldId, {
-          state: "confirmed",
+          state: "captured",
           value: patch.value,
           confidence: patch.confidence,
           evidence: patch.evidence,
         });
-        return this.askNext();
+        return this.confirm([fieldId]);
       }
 
       if (said === false) {
@@ -430,6 +503,17 @@ export class DialogueEngine {
     await this.speak(this.state.journey.scripts.robot_disclosure);
   }
 
+  /** "Can you say that again?" - the question, word for word, at no cost to the attempt count. */
+  private async repeatQuestion(): Promise<void> {
+    await this.speak(this.lastQuestion ?? this.state.render(this.state.journey.scripts.opener));
+  }
+
+  /** Speaks a line the customer is expected to answer, and remembers it for a repeat. */
+  private async askLine(text: string): Promise<void> {
+    this.lastQuestion = text;
+    await this.speak(text);
+  }
+
   private async askNext(): Promise<void> {
     if (!this.state.consent) throw new Error("consent gate: cannot ask a field before consent");
 
@@ -470,19 +554,40 @@ export class DialogueEngine {
     // new value in a turn that contains none. This is what the efficiency number
     // is measuring: a dropped-off lead should not re-answer what it already gave.
     const existing = this.state.form.get(field.id);
-    const isPrefilled = existing?.state === "prefilled" && existing.value !== null;
+    const prefilled = existing?.state === "prefilled" && existing.value !== null ? existing.value : null;
 
     this.state.asking = field.id;
     this.state.form.set(field.id, { state: "asking" });
 
     const attempts = this.state.form.get(field.id)?.attempts ?? 0;
     if (attempts > field.max_attempts) {
-      return this.handoff("CONFUSION", `${field.id} asked ${attempts} times`);
+      // The one place CONFUSION is decided. The detector reports the count for
+      // the meter but never fires on it: deciding there judged the answer to a
+      // re-ask before it had been heard, so on the first real call the second
+      // attempt at a name was handed off before extraction had even run.
+      const evidence = `${field.id} asked ${attempts} times`;
+      this.hooks.onSignals([{ signal: "CONFUSION", score: 1, evidence, fired: true }]);
+      return this.handoff("CONFUSION", evidence);
     }
 
-    if (isPrefilled && !opts.reask) this.state.awaitingConfirm = [field.id];
+    if (prefilled !== null && !opts.reask) {
+      // Confirmed, not asked. A yes/no read-back is a closed turn: one word for
+      // the line to carry, matched in code, no model - which is what survives a
+      // bad mobile connection. The first real call asked "Can I start with your
+      // full name?" for a name the lead already held, misheard the answer twice,
+      // and handed off with nothing captured.
+      this.state.awaitingConfirm = [field.id];
+      const spoken = speakableValue(field, prefilled);
+      await this.askLine(
+        this.state.render(prefilledLine(field), {
+          value: spoken,
+          value_spelled: field.confirm === "letters" ? spellOut(String(prefilled)) : spoken,
+        })
+      );
+      return;
+    }
 
-    await this.speak(this.state.render(opts.reask ? field.script.reask : field.script.ask));
+    await this.askLine(this.state.render(opts.reask ? field.script.reask : field.script.ask));
   }
 
   /**
@@ -513,7 +618,7 @@ export class DialogueEngine {
       const field = this.state.fieldById(id) as JourneyField;
       const value = this.state.form.get(id)?.value as NonNullable<ReturnType<Form["get"]>>["value"];
       const spoken = speakableValue(field, value);
-      return this.speak(
+      return this.askLine(
         this.state.render(field.script.confirm as string, {
           value: spoken,
           value_spelled: field.confirm === "letters" ? spellOut(String(value)) : spoken,
@@ -528,14 +633,14 @@ export class DialogueEngine {
       })
       .filter(Boolean);
 
-    return this.speak(`I have ${values.join(", ")}. Is that right?`);
+    return this.askLine(`I have ${values.join(", ")}. Is that right?`);
   }
 
   private async review(): Promise<void> {
     const missing = this.state.form.missing();
     if (missing.length) return this.askField(this.state.fieldById(missing[0] as string));
     this.state.phase = "review";
-    await this.speak(this.state.render(this.state.journey.scripts.review));
+    await this.askLine(this.state.render(this.state.journey.scripts.review));
   }
 
   /**
@@ -644,7 +749,9 @@ export class DialogueEngine {
     log.call(this.callId, `handoff: ${reason} - ${evidence.slice(0, 60)}`);
 
     this.hooks.onHandoff(reason, evidence);
-    await this.speak(this.state.journey.scripts.handoff_bridge);
+    // Heard whole. Cut short by a customer still finishing their sentence, it
+    // left them with "I'm going to" and then a transfer they had no warning of.
+    await this.speak(this.state.journey.scripts.handoff_bridge, { interruptible: false });
 
     if (env.handoffNumber) {
       try {
@@ -670,7 +777,7 @@ export class DialogueEngine {
    * lines stream sentence by sentence out of the model and into the TTS socket, so
    * first audio costs one short synthesis rather than the whole reply.
    */
-  private async speak(text: string, opts: { generate?: boolean } = {}): Promise<void> {
+  private async speak(text: string, opts: { generate?: boolean; interruptible?: boolean } = {}): Promise<void> {
     if (this.finalised) return;
     const controller = new AbortController();
     this.turn = controller;
@@ -689,7 +796,7 @@ export class DialogueEngine {
       if (!opts.generate || env.mockVoice) {
         this.state.say("agent", text, null);
         this.hooks.onAgentLine(text);
-        await this.transport.speak(text);
+        await this.transport.speak(text, { interruptible: opts.interruptible });
         return;
       }
 
@@ -772,6 +879,11 @@ export class DialogueEngine {
     this.silenceTimers = [];
   }
 
+  /** Restarts the silence clock if it is running. Every partial transcript lands here. */
+  private deferSilence(): void {
+    if (this.silenceTimers.length) this.armSilence();
+  }
+
   private async nudge(): Promise<void> {
     if (this.finalised || this.busy) return;
     this.nudges++;
@@ -820,6 +932,7 @@ export class DialogueEngine {
     this.finalised = true;
     this.clearSilence();
     this.clearFiller();
+    this.dropFragment();
     this.cancelTurn("finalise");
 
     this.state.outcome = outcome;
@@ -837,6 +950,51 @@ export class DialogueEngine {
   get isFinalised(): boolean {
     return this.finalised;
   }
+}
+
+function sameValue(a: FieldValue, b: FieldValue | undefined): boolean {
+  if (b === undefined || b === null) return false;
+  return String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+}
+
+/** Words a sentence does not end on. A commit ending here has more coming. */
+const DANGLING = new Set([
+  "the", "a", "an", "my", "it's", "its", "is", "at", "of", "to", "and", "let",
+  "uh", "um", "er", "ah", "hmm", "mm",
+]);
+
+/**
+ * Whether a committed transcript stopped mid-thought.
+ *
+ * Scribe writes a trailing dash when the speaker was cut off ("Uh, it's-"), and
+ * a final word that nothing ends on ("no, it's the") means the same. Both are
+ * held for the rest of the sentence rather than answered.
+ */
+export function looksCutOff(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (/[-\u2013\u2026]$/.test(trimmed)) return true;
+  const words = trimmed
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}'\s]/gu, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  const last = words.at(-1);
+  return last !== undefined && DANGLING.has(last);
+}
+
+/**
+ * The line for a field the lead already carries.
+ *
+ * An explicit `prefilled` script wins. Without one, a closed field's ask is
+ * already a yes/no or a choice ("Is this number the best one to reach you on?")
+ * and stands as it is; anything else falls back to the read-back template,
+ * which is phrased as a confirmation by definition.
+ */
+function prefilledLine(field: JourneyField): string {
+  if (field.script.prefilled) return field.script.prefilled;
+  if (field.capture === "closed") return field.script.ask;
+  return field.script.confirm ?? field.script.ask;
 }
 
 /** Convenience for the eval harness and the API route. */
