@@ -390,9 +390,20 @@ export class TwilioTransport implements Transport {
     // Sentence-level pipeline: every sentence is synthesised concurrently, and the
     // first one goes on the wire the moment it lands. Time-to-first-audio is one
     // short TTS call, not the whole reply.
+    //
+    // `onAudioMeta` describes one *line*, not one sentence, so each part's meta
+    // is collected here rather than handed straight to the caller - reporting it
+    // per sentence would make a three-sentence reply read as sentence one's
+    // character count and cache state, whichever they happened to be.
     const parts = splitForTts(text);
-    const jobs = parts.map((p) =>
-      synthesize({ text: p, onMeta: opts.onAudioMeta }).catch((err) => {
+    const partMetas: (AudioMeta | undefined)[] = new Array(parts.length);
+    const jobs = parts.map((p, i) =>
+      synthesize({
+        text: p,
+        onMeta: (meta) => {
+          partMetas[i] = meta;
+        },
+      }).catch((err) => {
         log.call(this.id, `TTS failed: ${err instanceof Error ? err.message : err}`);
         return Buffer.alloc(0);
       })
@@ -412,6 +423,10 @@ export class TwilioTransport implements Transport {
     // clock since the first frame, it says which sentences had finished playing
     // when the customer cut in.
     const sent: { text: string; ms: number }[] = [];
+    // Only the parts that actually reached the wire count toward the line's
+    // meta - a barge-in stops the loop before the rest are even awaited, and
+    // reporting their cost would describe a reply that was never heard.
+    const usedMetas: AudioMeta[] = [];
     for (let i = 0; i < jobs.length; i++) {
       const audio = await jobs[i];
       if (this.dead || !this.ws || !this.streamSid) break;
@@ -428,6 +443,20 @@ export class TwilioTransport implements Transport {
       frames += this.sendFrames(audio);
       sent.push({ text: parts[i] as string, ms: (audio.length / 8000) * 1000 });
       totalBytes += audio.length;
+      const meta = partMetas[i];
+      if (meta) usedMetas.push(meta);
+    }
+
+    // Fired once for the whole line, synchronously here rather than off a
+    // Promise.allSettled, so it lands before the caller has finished measuring
+    // the turn. A line cut short by barge-in reports only the parts that made
+    // it to the wire by then - that is what the line actually cost, not what
+    // the rest would have cost had it kept playing.
+    if (usedMetas.length) {
+      opts.onAudioMeta?.({
+        cached: usedMetas.every((m) => m.cached),
+        chars: usedMetas.reduce((sum, m) => sum + m.chars, 0),
+      });
     }
 
     if (!totalBytes || this.dead || !this.ws || !this.streamSid || !this.speaking) {

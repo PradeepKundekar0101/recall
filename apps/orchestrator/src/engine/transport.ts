@@ -61,6 +61,11 @@ export interface Transport {
    * `interruptible: false` plays the line to the end whatever the customer says.
    * The handoff bridge has to be heard whole: cut short by a customer still
    * finishing their address, it left them with "I'm going to" and a dead line.
+   *
+   * `onAudioMeta` fires once for the whole line, after whatever was actually
+   * produced has gone to the wire, with the cache/character cost of that line -
+   * never once per sentence, which would report one sentence's cost as the
+   * line's own.
    */
   speak(
     text: string,
