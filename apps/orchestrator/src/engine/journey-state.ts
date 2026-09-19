@@ -70,9 +70,24 @@ export class JourneyState {
     this.form.applyLead(lead);
   }
 
-  say(speaker: "agent" | "customer", text: string, confidence: number | null): void {
-    this.transcript.push({ at: Date.now(), speaker, text, confidence, final: true });
+  say(speaker: "agent" | "customer", text: string, confidence: number | null): TranscriptLine {
+    const line: TranscriptLine = { at: Date.now(), speaker, text, confidence, final: true };
+    this.transcript.push(line);
     if (this.transcript.length > 500) this.transcript.shift();
+    return line;
+  }
+
+  /**
+   * The line was talked over. The record keeps what the customer heard, marked
+   * the way Scribe marks a cut-off, and drops the line entirely if nothing was.
+   */
+  cut(line: TranscriptLine, heard: string): void {
+    if (heard) {
+      line.text = `${heard} -`;
+      return;
+    }
+    const at = this.transcript.indexOf(line);
+    if (at >= 0) this.transcript.splice(at, 1);
   }
 
   /**

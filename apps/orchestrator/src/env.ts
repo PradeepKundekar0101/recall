@@ -140,6 +140,14 @@ export const env = {
    */
   fragmentHoldMs: num("FRAGMENT_HOLD_MS", 2500),
 
+  /**
+   * How soon after a question becomes audible a person could be answering it.
+   * An utterance that started before that is a late word to the previous line,
+   * not an answer to this one. Covers the STT's partial latency plus a minimum
+   * human reaction; the checks set it to zero because their line plays instantly.
+   */
+  answerReactionMs: num("ANSWER_REACTION_MS", 400),
+
   /** Silence on an open question: nudge, nudge again, then close as abandoned. */
   silenceNudgeMs: num("SILENCE_NUDGE_MS", 6000),
   silenceSecondNudgeMs: num("SILENCE_SECOND_NUDGE_MS", 12000),

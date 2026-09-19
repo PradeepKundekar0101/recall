@@ -9,7 +9,7 @@ import { EscalationDetector, angerPatternMatched, looksLikeDontKnow, redactDigit
 import { extract } from "./extract.js";
 import { normalise, normaliseBool, speakableValue } from "./normalise.js";
 import { submitFinal, submitSection } from "../sandbox/submit.js";
-import type { Transport, TransportEndReason } from "./transport.js";
+import type { SpeakResult, Transport, TransportEndReason } from "./transport.js";
 
 /**
  * The per-call loop.
@@ -61,12 +61,25 @@ export class DialogueEngine {
   private fillerIndex = 0;
   private nudges = 0;
   private finalised = false;
-  private busy = false;
+
+  /**
+   * Customer turns run one at a time, in order. Two transcripts a breath apart
+   * used to run concurrently through extract() and decide(), and both would
+   * reach askNext() for the same field - the same question twice, or a "yes"
+   * confirming a read-back that was only asked because of the turn before it.
+   */
+  private running = false;
+  private queue: { raw: string; confidence: number | null; startedAt: number | null }[] = [];
 
   /** The last thing the customer was asked, for "can you say that again?". */
   private lastQuestion: string | null = null;
+  /** When that question became audible, and whether it played to the end. */
+  private questionAudibleAt = 0;
+  private questionDelivered = true;
+  /** Questions asked so far, so a turn can tell whether it asked one. */
+  private asks = 0;
   /** A committed transcript that stopped mid-thought, waiting for the rest. */
-  private fragment: { text: string; confidence: number | null } | null = null;
+  private fragment: { text: string; confidence: number | null; startedAt: number | null } | null = null;
   private fragmentTimer: NodeJS.Timeout | null = null;
 
   constructor(
@@ -95,7 +108,7 @@ export class DialogueEngine {
       // not committed it yet.
       this.deferSilence();
     });
-    transport.onUtterance((text, confidence) => void this.onTranscript(text, confidence));
+    transport.onUtterance((text, confidence, meta) => this.onTranscript(text, confidence, meta?.startedAt ?? null));
     transport.onBargeIn(() => this.cancelTurn("barge-in"));
     transport.onEnded((reason) => void this.onTransportEnded(reason));
   }
@@ -116,7 +129,7 @@ export class DialogueEngine {
     // and the call was handed to a human on turn one. It also made the whole
     // suite flaky, since whether the window was hit depended on timing.
     this.state.phase = "consent";
-    await this.askLine(this.state.render(scripts.opener));
+    await this.exclusive(() => this.askLine(this.state.render(scripts.opener)));
     this.armSilence();
   }
 
@@ -126,7 +139,7 @@ export class DialogueEngine {
    * Extraction and escalation run concurrently, so a handoff can interrupt a reply
    * that is already being composed.
    */
-  private async onTranscript(raw: string, confidence: number | null): Promise<void> {
+  private onTranscript(raw: string, confidence: number | null, startedAt: number | null): void {
     if (this.finalised || this.detector.hasFired) return;
 
     // A commit that stops mid-thought is held for the rest of the sentence.
@@ -144,17 +157,48 @@ export class DialogueEngine {
         held.confidence === null || confidence === null
           ? (confidence ?? held.confidence)
           : Math.min(held.confidence, confidence);
+      startedAt = held.startedAt ?? startedAt;
     } else if (looksCutOff(raw)) {
-      this.fragment = { text: raw, confidence };
+      this.fragment = { text: raw, confidence, startedAt };
       this.fragmentTimer = setTimeout(() => {
         const held = this.fragment;
         this.dropFragment();
-        if (held) void this.handleTurn(held.text, held.confidence);
+        if (held) this.enqueue(held.text, held.confidence, held.startedAt);
       }, env.fragmentHoldMs);
       return;
     }
 
-    await this.handleTurn(raw, confidence);
+    this.enqueue(raw, confidence, startedAt);
+  }
+
+  private enqueue(raw: string, confidence: number | null, startedAt: number | null): void {
+    this.queue.push({ raw, confidence, startedAt });
+    if (this.running) {
+      // A second utterance while a reply is still being composed cancels the
+      // first; the turn itself waits its go.
+      this.cancelTurn("new utterance");
+      return;
+    }
+    void this.drain();
+  }
+
+  private drain(): Promise<void> {
+    return this.exclusive(async () => {
+      for (let next = this.queue.shift(); next; next = this.queue.shift()) {
+        await this.handleTurn(next.raw, next.confidence, next.startedAt);
+      }
+    });
+  }
+
+  /** One thing on the line at a time: the opener, or a run of queued turns. */
+  private async exclusive(fn: () => Promise<void>): Promise<void> {
+    this.running = true;
+    try {
+      await fn();
+    } finally {
+      this.running = false;
+    }
+    if (this.queue.length) void this.drain();
   }
 
   private dropFragment(): void {
@@ -163,10 +207,18 @@ export class DialogueEngine {
     this.fragment = null;
   }
 
-  private async handleTurn(raw: string, confidence: number | null): Promise<void> {
+  private async handleTurn(raw: string, confidence: number | null, startedAt: number | null): Promise<void> {
     if (this.finalised || this.detector.hasFired) return;
     this.clearSilence();
     this.nudges = 0;
+
+    // Which line this was said to. An utterance that began before the current
+    // question could be heard was said over the line before it - "yeah, go
+    // ahead" over "Great, thanks" is not a yes to the read-back that followed.
+    const predates = startedAt !== null && startedAt < this.questionAudibleAt + env.answerReactionMs;
+    // Whether the customer was asked something they never got to hear.
+    const cutBefore = !this.questionDelivered;
+    const asksBefore = this.asks;
 
     // Guardrail 3: a digit run never reaches the transcript, the log or a screen.
     //
@@ -181,10 +233,6 @@ export class DialogueEngine {
     this.state.say("customer", text, confidence);
     this.hooks.onCustomerLine(text, confidence);
 
-    // A second utterance while a reply is still being composed cancels the first.
-    if (this.busy) this.cancelTurn("new utterance");
-    this.busy = true;
-
     try {
       // Rule-based intent runs before the model and before the detector. A decline
       // has to outrank every escalation signal: transferring someone who just asked
@@ -194,114 +242,144 @@ export class DialogueEngine {
       if (rule === "decline") return await this.decline();
       if (rule === "busy") return await this.callback(text);
       if (rule === "ask_human") return await this.handoff("ASKS", text);
-      if (rule === "robot_check") return await this.robotCheck();
-      if (rule === "repeat") return await this.repeatQuestion();
+      if (rule === "robot_check") await this.robotCheck();
+      else if (rule === "repeat") await this.repeatQuestion();
+      else if (predates && isBareYesNo(text)) {
+        // A yes or no to the line before this question. That line has already
+        // been dealt with, and this question has not been answered.
+        log.call(this.callId, `ignored "${text}" - said before the question on the line`);
+      } else await this.answer(text, raw, confidence, predates);
 
-      const asking = this.state.asking ? (this.state.fieldById(this.state.asking) ?? null) : null;
+      await this.resumeQuestion(cutBefore, asksBefore);
+    } catch (err) {
+      log.call(this.callId, `turn failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.clearFiller();
+      if (!this.finalised && !this.detector.hasFired) this.armSilence();
+    }
+  }
 
-      // The line must not go quiet while the model thinks. Measured against a
-      // gateway, extraction can take over a second, which on a phone reads as the
-      // agent having hung up. A short pre-rendered acknowledgement covers it and
-      // costs nothing, because it is already ulaw on disk.
+  /** The model-backed part of a turn: extraction and escalation, then the decision. */
+  private async answer(text: string, raw: string, confidence: number | null, predates: boolean): Promise<void> {
+    const asking = this.state.asking ? (this.state.fieldById(this.state.asking) ?? null) : null;
+
+    // The line must not go quiet while the model thinks. Measured against a
+    // gateway, extraction can take over a second, which on a phone reads as the
+    // agent having hung up. A short pre-rendered acknowledgement covers it and
+    // costs nothing, because it is already ulaw on disk.
 
 
-      /**
-       * Whether this turn needs the model at all.
-       *
-       * A closed field answered with a recognisable yes/no or enum value is
-       * resolved in code further down, so calling the extractor first buys
-       * nothing and costs the slowest part of the turn - measured at ~1.4s
-       * against a 250ms budget. Roughly a third of the journey's questions are
-       * closed, so on those turns this is the difference between a conversation
-       * and a walkie-talkie.
-       *
-       * Natural and spelled fields still go to the model: those are the turns
-       * where a customer volunteers three fields in one breath, and the whole
-       * efficiency argument lives there.
-       */
-      /**
-       * A short yes to a read-back, to the consent question or at the review
-       * gate is decided in code too. Sending "Okay." to the extractor bought a
-       * filler and a model round trip on every prefilled confirmation - the
-       * second real call went "Okay." / "Right." / next question, five times.
-       * A "no" still goes to the model, because it usually carries the
-       * corrected value.
-       */
-      const bareYes =
-        (this.state.awaitingConfirm.length > 0 || this.state.phase === "consent" || this.state.phase === "review") &&
-        text.length < 20 &&
-        normaliseBool(text) === true;
+    /**
+     * Whether this turn needs the model at all.
+     *
+     * A closed field answered with a recognisable yes/no or enum value is
+     * resolved in code further down, so calling the extractor first buys
+     * nothing and costs the slowest part of the turn - measured at ~1.4s
+     * against a 250ms budget. Roughly a third of the journey's questions are
+     * closed, so on those turns this is the difference between a conversation
+     * and a walkie-talkie.
+     *
+     * Natural and spelled fields still go to the model: those are the turns
+     * where a customer volunteers three fields in one breath, and the whole
+     * efficiency argument lives there.
+     */
+    /**
+     * A short yes to a read-back, to the consent question or at the review
+     * gate is decided in code too. Sending "Okay." to the extractor bought a
+     * filler and a model round trip on every prefilled confirmation - the
+     * second real call went "Okay." / "Right." / next question, five times.
+     * A "no" still goes to the model, because it usually carries the
+     * corrected value.
+     */
+    const bareYes =
+      (this.state.awaitingConfirm.length > 0 || this.state.phase === "consent" || this.state.phase === "review") &&
+      text.length < 20 &&
+      normaliseBool(text) === true;
 
-      const resolvableInCode =
-        bareYes ||
+    // An utterance said over the previous line cannot be the answer to this
+    // one, so it always goes to the model for whatever it volunteered.
+    const resolvableInCode =
+      !predates &&
+      (bareYes ||
         (asking?.capture === "closed" &&
           (asking.type === "bool"
             ? normaliseBool(text) !== null
             : asking.type === "enum"
               ? normalise(asking, text).ok
-              : false));
+              : false)));
 
-      // Only when something slow is about to happen. A closed field resolved in
-      // code answers in single-digit milliseconds, and a filler in front of that
-      // is not covering a pause, it is adding chatter.
-      if (!resolvableInCode) this.armFiller();
+    // Only when something slow is about to happen. A closed field resolved in
+    // code answers in single-digit milliseconds, and a filler in front of that
+    // is not covering a pause, it is adding chatter.
+    if (!resolvableInCode) this.armFiller();
 
-      const [extraction, readings] = await Promise.all([
-        resolvableInCode
-          ? Promise.resolve({ accepted: [], rejected: [], intent: "answer" as const, ms: 0 })
-          : extract({
-              journey: this.state.journey,
-              form: this.state.form,
-              utterance: text,
-              asking,
-              sttConfidence: confidence,
-            }),
-        this.detector.evaluate({
-          // Raw, not redacted: this is the only consumer that needs the digits.
-          utterance: raw,
-          intent: "answer",
-          sttConfidence: confidence,
-          attempts: asking ? (this.state.form.get(asking.id)?.attempts ?? 0) : 0,
-          maxAttempts: asking?.max_attempts ?? 2,
-          // A short yes/no to a closed question, or a yes to a read-back, is an
-          // answer rather than a mood.
-          // A yes or no is an answer wherever it appears: to a closed field, to a
-          // read-back, or to the consent question. "Fine, but be quick" was being
-          // rated as anger and handing off on turn one, when it is simply
-          // someone agreeing while telling you they are busy.
-          closedAnswer:
-            (asking?.capture === "closed" ||
-              this.state.awaitingConfirm.length > 0 ||
-              this.state.phase === "consent") &&
-            normaliseBool(text) !== null &&
-            text.length < 40,
-        }).then((r) => {
-          this.hooks.onSignals(r);
-          return r;
-        }),
-      ]);
+    const [extraction, readings] = await Promise.all([
+      resolvableInCode
+        ? Promise.resolve({ accepted: [], rejected: [], intent: "answer" as const, ms: 0 })
+        : extract({
+            journey: this.state.journey,
+            form: this.state.form,
+            utterance: text,
+            asking,
+            sttConfidence: confidence,
+          }),
+      this.detector.evaluate({
+        // Raw, not redacted: this is the only consumer that needs the digits.
+        utterance: raw,
+        intent: "answer",
+        sttConfidence: confidence,
+        attempts: asking ? (this.state.form.get(asking.id)?.attempts ?? 0) : 0,
+        maxAttempts: asking?.max_attempts ?? 2,
+        // A short yes/no to a closed question, or a yes to a read-back, is an
+        // answer rather than a mood.
+        // A yes or no is an answer wherever it appears: to a closed field, to a
+        // read-back, or to the consent question. "Fine, but be quick" was being
+        // rated as anger and handing off on turn one, when it is simply
+        // someone agreeing while telling you they are busy.
+        closedAnswer:
+          (asking?.capture === "closed" ||
+            this.state.awaitingConfirm.length > 0 ||
+            this.state.phase === "consent") &&
+          normaliseBool(text) !== null &&
+          text.length < 40,
+      }).then((r) => {
+        this.hooks.onSignals(r);
+        return r;
+      }),
+    ]);
 
-      // Now that extraction has landed, the detector can tell venting from
-      // answering and decide ANGER accordingly.
-      this.detector.resolveAnger(readings, {
-        producedAnswers: extraction.accepted.length > 0,
-        patternMatched: angerPatternMatched(text),
-      });
+    // Now that extraction has landed, the detector can tell venting from
+    // answering and decide ANGER accordingly.
+    this.detector.resolveAnger(readings, {
+      producedAnswers: extraction.accepted.length > 0,
+      patternMatched: angerPatternMatched(text),
+    });
 
-      this.clearFiller();
-      if (this.detector.hasFired || this.finalised) return;
-      await this.decide(text, extraction);
-    } catch (err) {
-      log.call(this.callId, `turn failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      this.clearFiller();
-      this.busy = false;
-      if (!this.finalised && !this.detector.hasFired) this.armSilence();
-    }
+    this.clearFiller();
+    if (this.detector.hasFired || this.finalised) return;
+    await this.decide(text, extraction, predates);
   }
 
-  /** Routes the turn: consent, an exit path, a confirmation, or the next field. */
-  private async decide(text: string, extraction: Awaited<ReturnType<typeof extract>>): Promise<void> {
+  /**
+   * A question the customer talked over was never asked, whatever the script
+   * says. Once the interruption has been dealt with, if this turn did not ask
+   * anything else, it goes again - word for word, at no cost to the attempt count.
+   */
+  private async resumeQuestion(cutBefore: boolean, asksBefore: number): Promise<void> {
+    if (!cutBefore || this.asks !== asksBefore) return;
+    if (this.finalised || this.detector.hasFired || !this.lastQuestion) return;
+    log.call(this.callId, "asking again the question that was talked over");
+    await this.repeatQuestion();
+  }
+
+  /**
+   * Routes the turn: consent, an exit path, a confirmation, or the next field.
+   *
+   * `predates` means the utterance began before the current question could be
+   * heard. It can still volunteer values; it cannot answer, confirm or fail the
+   * question, and it never moves the journey past it.
+   */
+  private async decide(text: string, extraction: Awaited<ReturnType<typeof extract>>, predates: boolean): Promise<void> {
     const { scripts } = this.state.journey;
 
     // A yes or no to a closed question is an answer, decided here and not by the
@@ -313,7 +391,7 @@ export class DialogueEngine {
     // reading of a two-letter utterance stripped of its question - so it is
     // resolved directly, which is both safer and one round trip cheaper.
     const askingField = this.state.asking ? this.state.fieldById(this.state.asking) : undefined;
-    if (askingField?.capture === "closed" && (askingField.type === "bool" || askingField.type === "enum")) {
+    if (!predates && askingField?.capture === "closed" && (askingField.type === "bool" || askingField.type === "enum")) {
       const result =
         askingField.type === "bool"
           ? (() => {
@@ -375,6 +453,7 @@ export class DialogueEngine {
     // The review gate. A yes here is the last thing standing between the form and
     // the sandbox, so it is handled before anything else that could reinterpret it.
     if (this.state.phase === "review") {
+      if (predates) return;
       const said = normaliseBool(text);
       if (said === true) return this.submit();
       if (said === false) {
@@ -389,12 +468,14 @@ export class DialogueEngine {
           return this.askField(named, { reask: true });
         }
         this.state.phase = "section";
-        return this.speak("No problem - which part should I change?");
+        await this.speak("No problem - which part should I change?");
+        return;
       }
       return this.askLine(this.state.render(this.state.journey.scripts.review));
     }
 
     if (this.state.phase === "consent") {
+      if (predates) return;
       const said = normaliseBool(text);
       if (said === false) return this.decline();
       if (said !== true) {
@@ -411,9 +492,13 @@ export class DialogueEngine {
       const pending = this.state.awaitingConfirm;
       const fieldId = pending[0] as string;
       const said = normaliseBool(text);
+      const patch = extraction.accepted.find((p) => p.field === fieldId);
+      // Said over the line before the read-back: only a value for the field
+      // being read back means anything, and the read-back stands otherwise.
+      if (predates && !patch) return;
       this.state.awaitingConfirm = [];
 
-      if (said === true) {
+      if (said === true && !predates) {
         for (const id of pending) this.state.form.set(id, { state: "confirmed" });
         return this.askNext();
       }
@@ -422,7 +507,6 @@ export class DialogueEngine {
       // this still your number?" they read out a different one, and asked to
       // confirm a prefilled name they simply say the name. Taking that as a "no"
       // and re-asking makes the agent look like it was not listening.
-      const patch = extraction.accepted.find((p) => p.field === fieldId);
       if (patch) {
         // Saying the value back instead of "yes" is a yes.
         if (sameValue(patch.value, this.state.form.get(fieldId)?.value)) {
@@ -465,6 +549,9 @@ export class DialogueEngine {
 
     const needsConfirm = extraction.accepted.filter((p) => p.needsConfirm).map((p) => p.field);
     if (needsConfirm.length) return this.confirm(needsConfirm);
+
+    // The question on the line is still waiting for its answer.
+    if (predates && this.state.asking && !extraction.accepted.some((p) => p.field === this.state.asking)) return;
 
     if (!extraction.accepted.length && this.state.asking) {
       const asked = this.state.fieldById(this.state.asking);
@@ -511,7 +598,17 @@ export class DialogueEngine {
   /** Speaks a line the customer is expected to answer, and remembers it for a repeat. */
   private async askLine(text: string): Promise<void> {
     this.lastQuestion = text;
-    await this.speak(text);
+    this.asks++;
+    this.questionAudibleAt = Infinity;
+    this.questionDelivered = false;
+    const result = await this.speak(text, {
+      onFirstAudio: () => {
+        this.questionAudibleAt = Date.now();
+      },
+    });
+    // Nothing reached the wire. Do not leave every later answer "predating" it.
+    if (this.questionAudibleAt === Infinity) this.questionAudibleAt = Date.now();
+    this.questionDelivered = result.completed;
   }
 
   private async askNext(): Promise<void> {
@@ -777,8 +874,11 @@ export class DialogueEngine {
    * lines stream sentence by sentence out of the model and into the TTS socket, so
    * first audio costs one short synthesis rather than the whole reply.
    */
-  private async speak(text: string, opts: { generate?: boolean; interruptible?: boolean } = {}): Promise<void> {
-    if (this.finalised) return;
+  private async speak(
+    text: string,
+    opts: { generate?: boolean; interruptible?: boolean; onFirstAudio?: () => void } = {}
+  ): Promise<SpeakResult> {
+    if (this.finalised) return { completed: false, heard: "" };
     const controller = new AbortController();
     this.turn = controller;
 
@@ -794,10 +894,15 @@ export class DialogueEngine {
       // Keeping the model out of the speech path also takes it off the critical
       // path entirely: a turn now costs one extraction call, not two round trips.
       if (!opts.generate || env.mockVoice) {
-        this.state.say("agent", text, null);
+        const line = this.state.say("agent", text, null);
         this.hooks.onAgentLine(text);
-        await this.transport.speak(text, { interruptible: opts.interruptible });
-        return;
+        const result = await this.transport.speak(text, {
+          interruptible: opts.interruptible,
+          onFirstAudio: opts.onFirstAudio,
+        });
+        // The record keeps what was heard, not what was scripted.
+        if (!result.completed) this.state.cut(line, result.heard);
+        return result;
       }
 
       const spoken = await this.transport.speakStream(
@@ -814,6 +919,7 @@ export class DialogueEngine {
         this.state.say("agent", spoken || text, null);
         this.hooks.onAgentLine(spoken || text);
       }
+      return { completed: !controller.signal.aborted, heard: spoken };
     } finally {
       if (this.turn === controller) this.turn = null;
     }
@@ -885,7 +991,7 @@ export class DialogueEngine {
   }
 
   private async nudge(): Promise<void> {
-    if (this.finalised || this.busy) return;
+    if (this.finalised || this.running) return;
     this.nudges++;
     await this.speak("Sorry, are you still there?");
   }
@@ -970,6 +1076,11 @@ const DANGLING = new Set([
  * a final word that nothing ends on ("no, it's the") means the same. Both are
  * held for the rest of the sentence rather than answered.
  */
+/** A short yes or no and nothing else - the shape of a word said over the previous line. */
+function isBareYesNo(text: string): boolean {
+  return text.length < 20 && normaliseBool(text) !== null;
+}
+
 export function looksCutOff(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;

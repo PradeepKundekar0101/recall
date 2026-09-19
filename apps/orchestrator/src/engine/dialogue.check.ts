@@ -29,6 +29,8 @@ process.env.SILENCE_SECOND_NUDGE_MS = "800";
 process.env.SILENCE_ABANDON_MS = "1200";
 process.env.FILLER_AFTER_MS = "60000";
 process.env.FRAGMENT_HOLD_MS = "300";
+// The fake line plays instantly, so the customer's reaction time is the test's own delay.
+process.env.ANSWER_REACTION_MS = "0";
 // Hermetic: a completed section would otherwise PUT to whatever is on :4001.
 process.env.SANDBOX_URL = "http://127.0.0.1:9";
 
@@ -43,6 +45,10 @@ log.warn = () => {};
 
 const journey = loadJourney();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+async function until(cond: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!cond() && Date.now() < deadline) await sleep(2);
+}
 
 /** A phone line with a scripted customer on it and no vendors behind it. */
 class FakeLine implements Transport {
@@ -372,6 +378,87 @@ console.log("\n-- a customer who is mid-sentence is not asked if they are still 
   check("the nudge still fires once the partials stop", nudged() === 1, `${nudged()} nudge(s) by 850ms`);
 
   await engine.finalise("abandoned");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a yes spoken over the acknowledgement does not answer the question that follows it");
+{
+  // The customer said "yeah, go ahead" while "Great, thanks..." was still playing.
+  // That is a yes to the consent question they already answered, not to the name
+  // read-back that had not started yet - and it must not confirm the name.
+  const { line, engine } = scenario("early-yes", IDENTITY_AND_CONTACT);
+  line.speakMs = 40;
+  await engine.begin();
+  line.say("Yes.");
+  await until(() => line.spoken.some((l) => /^Great, thanks/.test(l)));
+  line.say("Yeah, go ahead.");
+  await line.settle(150);
+
+  const acks = line.spoken.filter((l) => /^Great, thanks/.test(l)).length;
+  const asks = line.spoken.filter((l) => /Priya Sharma/.test(l)).length;
+  check("the acknowledgement is spoken once", acks === 1, `${acks} time(s)`);
+  check("the name is read back once", asks === 1, `${asks} time(s): ${line.spoken.join(" | ")}`);
+  check("a yes that predates the read-back does not confirm it", engine.state.form.get("full_name")?.state !== "confirmed", String(engine.state.form.get("full_name")?.state));
+  check("no line overlapped another", line.overlaps === 0, `${line.overlaps} overlap(s)`);
+
+  line.say("Yes.");
+  await line.settle(150);
+  check("the yes after the read-back confirms it", engine.state.form.get("full_name")?.state === "confirmed", String(engine.state.form.get("full_name")?.state));
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a second final while the first is being answered does not ask twice");
+{
+  const { line, engine } = scenario("two-finals", THROUGH_SUPPLY);
+  await engine.begin();
+  for (let i = 0; i < 10; i++) {
+    line.say("Yes.");
+    await line.settle();
+  }
+  check("the walk reaches the fuel type question", /electricity, gas, or both/i.test(line.last()), line.last());
+
+  line.speakMs = 40;
+  const before = line.spoken.length;
+  line.say("Electricity.");
+  await sleep(15);
+  // The customer was still talking when the first transcript committed: this
+  // began well before the NMI question could have been heard.
+  line.say("Yeah, electricity.", 0.9, { startedAt: Date.now() - 500 });
+  await line.settle(150);
+
+  const since = line.spoken.slice(before);
+  check("the NMI question is asked exactly once, and nothing else is said", since.length === 1 && /NMI/.test(since[0] ?? ""), since.join(" | "));
+  check("fuel type is confirmed", engine.state.form.get("fuel_type")?.value === "electricity", String(engine.state.form.get("fuel_type")?.value));
+  check("no attempt is charged against the NMI", (engine.state.form.get("nmi")?.attempts ?? 0) <= 1, `attempts=${engine.state.form.get("nmi")?.attempts}`);
+  check("no line overlapped another", line.overlaps === 0, `${line.overlaps} overlap(s)`);
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- an aside that cuts a question off gets the question asked again");
+{
+  const { line, engine } = scenario("aside", THROUGH_SUPPLY);
+  await engine.begin();
+  for (let i = 0; i < 9; i++) {
+    line.say("Yes.");
+    await line.settle();
+  }
+  line.speakMs = 40;
+  line.say("Yes.");
+  await until(() => /electricity, gas, or both/i.test(line.last()));
+  // Two words into the question: "hang on, am I talking to a robot?"
+  line.say("Hang on, am I talking to a robot?", 0.9, { cuts: true });
+  await line.settle(150);
+
+  const tail = line.spoken.slice(-2);
+  check("the robot question is answered honestly", /automated assistant/i.test(tail[0] ?? ""), tail.join(" | "));
+  check("then the question they never heard is asked again, word for word", /^Is this for electricity, gas, or both\?$/.test(tail[1] ?? ""), tail.join(" | "));
+  check("no attempt is charged for the aside", engine.state.form.get("fuel_type")?.attempts === 1, `attempts=${engine.state.form.get("fuel_type")?.attempts}`);
+  const agentLines = engine.state.transcript.filter((t) => t.speaker === "agent").map((t) => t.text).slice(-2);
+  check("the transcript records what was heard, not what was cut off", /automated assistant/i.test(agentLines[0] ?? "") && /electricity, gas, or both/i.test(agentLines[1] ?? ""), agentLines.join(" | "));
+  check("no line overlapped another", line.overlaps === 0, `${line.overlaps} overlap(s)`);
+  await engine.finalise("incomplete");
 }
 
 console.log(failures ? `\n${failures} failure(s).` : "\nAll dialogue checks pass.");
