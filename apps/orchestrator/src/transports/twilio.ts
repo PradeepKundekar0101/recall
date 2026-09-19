@@ -146,6 +146,18 @@ export class TwilioTransport implements Transport {
   private inboundStalls = 0;
   private longestStallMs = 0;
 
+  /**
+   * One line on the wire at a time.
+   *
+   * `speaking`, `lastSpokenTokens` and the mark resolvers all describe a single
+   * utterance, so two overlapping `speak()` calls corrupt each other. The first
+   * line's mark cleared `speaking` while the second was still playing, which
+   * switched barge-in off for the rest of it and reported the second line as cut
+   * when it had been heard whole. Callers are not trusted to serialise - the
+   * engine's filler is fire-and-forget by design - so the wire does it.
+   */
+  private playback: Promise<unknown> = Promise.resolve();
+
   /** False while a line that must be heard whole is playing. */
   private interruptible = true;
   /** Set once the call has been handed to a human. It is theirs from then on. */
@@ -334,6 +346,23 @@ export class TwilioTransport implements Transport {
   }
 
   async speak(text: string, opts: { onFirstAudio?: () => void; interruptible?: boolean } = {}): Promise<SpeakResult> {
+    return this.onTheWire(() => this.playLine(text, opts));
+  }
+
+  /** Waits for whatever is playing, then runs `fn`. Never wedges on a rejection. */
+  private onTheWire<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.playback.then(fn, fn);
+    this.playback = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }
+
+  private async playLine(
+    text: string,
+    opts: { onFirstAudio?: () => void; interruptible?: boolean }
+  ): Promise<SpeakResult> {
     const nothing: SpeakResult = { completed: false, heard: "" };
     if (this.dead) return nothing;
     this.interruptible = opts.interruptible ?? true;
@@ -431,6 +460,10 @@ export class TwilioTransport implements Transport {
    * already started talking.
    */
   async speakStream(sentences: AsyncIterable<string>, signal?: AbortSignal): Promise<string> {
+    return this.onTheWire(() => this.streamLine(sentences, signal));
+  }
+
+  private async streamLine(sentences: AsyncIterable<string>, signal?: AbortSignal): Promise<string> {
     if (this.dead) return "";
     if (!this.streamSid) await this.streamReady.catch(() => undefined);
     if (this.dead || !this.ws || !this.streamSid) return "";

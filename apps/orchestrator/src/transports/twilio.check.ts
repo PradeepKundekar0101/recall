@@ -283,5 +283,40 @@ console.log("\n-- talking over the agent");
   );
 }
 
+console.log("\n-- two lines handed over at once");
+{
+  // The engine's filler is fire-and-forget, so a reply can arrive here while
+  // "Okay." is still playing. Both used to go on the wire together, and the
+  // first line's mark then cleared `speaking` while the second was still
+  // playing - which switched barge-in off for the rest of it.
+  const stt = fakeStt();
+  const { transport, stream } = await connect("check-two-lines", stt.open, 100);
+  const first = transport.speak("First line.");
+  const second = transport.speak("Second line.");
+  await sleep(20);
+  check("the second line waits for the first to play out", stream.mediaFrames === 20, `${stream.mediaFrames} frames already sent`);
+
+  const [a, b] = await Promise.all([first, second]);
+  check("both lines report they were heard whole", a.completed && b.completed, JSON.stringify([a, b]));
+  check("both lines reached the wire", stream.mediaFrames === 40, `${stream.mediaFrames} frames`);
+}
+
+{
+  const stt = fakeStt();
+  const { transport, stream } = await connect("check-two-lines-barge", stt.open, 100);
+  void transport.speak("First line.");
+  const second = transport.speak("Second line.");
+  // Long enough that the first line has played out and the second is playing.
+  await sleep(150);
+  stt.start();
+  stt.partial("hang on stop there");
+  const b = await second;
+  check(
+    "the line that is actually playing owns the barge-in",
+    stream.cleared && b.completed === false,
+    `cleared=${stream.cleared} ${JSON.stringify(b)}`
+  );
+}
+
 console.log(failures ? `\n${failures} failure(s).` : "\nAll transport checks pass.");
 process.exit(failures ? 1 : 0);
