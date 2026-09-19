@@ -94,9 +94,10 @@
       "capture": "closed",
       "confirm": "read_back",
       "script": {
-        "ask": "Is this number the best one to reach you on?",
-        "reask": "Sorry, is this the best number for you?",
-        "confirm": "I have {value_spelled}. Is that right?"
+        "ask": "What's the best number to reach you on?",
+        "reask": "Sorry, what's the best number to reach you on?",
+        "confirm": "I have {value_spelled}. Is that right?",
+        "prefilled": "Is this number the best one to reach you on?"
       },
       "validate": "phone_au",
       "max_attempts": 2,
@@ -394,8 +395,9 @@
       "capture": "closed",
       "confirm": "read_back",
       "script": {
-        "ask": "Last thing - you were looking at {plan_name}. Shall I put you down for that one?",
-        "reask": "Sorry, did you want to go ahead with {plan_name}?",
+        "ask": "Last thing - which plan would you like to go with?",
+        "prefilled": "Last thing - you were looking at {plan_name}. Shall I put you down for that one?",
+        "reask": "Sorry, which plan would you like to go with?",
         "confirm": "{value}. Confirmed?"
       },
       "max_attempts": 2,

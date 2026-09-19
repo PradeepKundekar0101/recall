@@ -112,6 +112,26 @@ export const journeySchema = z
         });
       }
 
+      // A closed field is answered with a yes, a no or one of a list. For bool
+      // and enum the engine can read that answer in code; for any other type it
+      // can only be a confirmation of a value the form already holds, and the
+      // `prefilled` script is the line that does the confirming.
+      //
+      // Without it, `ask` has to carry both jobs, and a field whose lead value
+      // is missing gets asked its confirmation ("Is this number the best one to
+      // reach you on?") with nothing to confirm - a question no answer can
+      // satisfy. Call bd82d644 spent its last twenty seconds there and then
+      // handed off for CONFUSION.
+      if (field.capture === "closed" && field.type !== "bool" && field.type !== "enum" && !field.script.prefilled) {
+        ctx.addIssue({
+          code: "custom",
+          message:
+            `field "${field.id}" is closed and type="${field.type}", so it can only be closed by confirming a known ` +
+            `value - it needs a prefilled script for that, and an ask that stands on its own when the value is missing`,
+          ...at("script"),
+        });
+      }
+
       // The engine never asks for a sensitive field, so a required one would
       // deadlock the call at the review gate.
       if (field.sensitive && field.required) {

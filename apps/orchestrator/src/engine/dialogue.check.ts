@@ -222,6 +222,13 @@ const IDENTITY_AND_CONTACT = {
   email: "priya.sharma@example.com",
 };
 
+/** What the console leaves behind when the operator clears the number. */
+const IDENTITY_WITHOUT_PHONE = {
+  full_name: "Priya Sharma",
+  dob: "1989-03-07",
+  account_holder: true,
+};
+
 const THROUGH_SUPPLY = {
   ...IDENTITY_AND_CONTACT,
   street: "42 Wattle Street",
@@ -266,6 +273,61 @@ console.log("\n-- a field the lead already carries is confirmed, not asked");
   const emailField = engine.state.form.get("email");
   check("the prefilled email is confirmed with its value", emailField?.state === "confirmed" && emailField.value === "priya.sharma@example.com");
   check("the first empty field is asked normally", /street address/i.test(line.last()), line.last());
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a number the form does not hold is asked for, not confirmed at nothing");
+{
+  // Call bd82d644, 19 Sep 2026 05:58 UTC. Lead L-1043 carried no phone, so the
+  // form held nothing for that field - but its script is a confirmation ("Is
+  // this number the best one to reach you on?") and the engine asked it anyway.
+  // "Yeah." cannot fill a phone field, so the same question came round five
+  // seconds later, "Oh, yes, it is." could not fill it either, and the attempt
+  // after that handed the call off for CONFUSION. The customer had answered
+  // every time. A confirmation is only a question when there is something to
+  // confirm; with nothing, the field has to be asked for outright.
+  const { line, engine, captured } = scenario("phone-unknown", IDENTITY_WITHOUT_PHONE, {
+    extract: async ({ utterance }) => ({
+      accepted: /four one two/i.test(utterance)
+        ? [{ field: "phone", value: "+61412345678", confidence: 0.9, evidence: utterance, needsConfirm: true }]
+        : [],
+      rejected: [],
+      intent: "answer" as const,
+      ms: 0,
+    }),
+  });
+  await engine.begin();
+  line.say("Yes.");
+  await line.settle();
+  for (const _ of ["full_name", "dob", "account_holder"]) {
+    line.say("Yes.");
+    await line.settle();
+  }
+
+  const asked = line.last();
+  check("a phone the form does not hold is asked for outright", /what'?s the best number/i.test(asked), asked);
+  check("it is not put as a confirmation of nothing", !/is this number the best one/i.test(asked), asked);
+  // The account holder read-back was answered by the yes/no shortcut, which
+  // returns before the branch that clears this. Left pending, it ate the answer
+  // to this question as a late yes to that one.
+  check(
+    "the read-back before it is no longer pending",
+    engine.state.awaitingConfirm.length === 0,
+    JSON.stringify(engine.state.awaitingConfirm)
+  );
+
+  line.say("Oh four one two, three four five, six seven eight.");
+  await line.settle();
+  check("the number that is given is read back", /is that right/i.test(line.last()), line.last());
+  line.say("Yes.");
+  await line.settle();
+
+  const phone = engine.state.form.get("phone");
+  check("the number is captured", phone?.state === "confirmed" && phone.value === "+61412345678", JSON.stringify(phone));
+  check("no handoff on a customer who answered", captured.handoff === null, String(captured.handoff));
+  check("the journey moves on", /email/i.test(line.last()), line.last());
 
   await engine.finalise("incomplete");
 }

@@ -702,6 +702,17 @@ export class DialogueEngine {
       return;
     }
 
+    // A new question is on the line, so nothing is waiting on a read-back any
+    // more. A prefilled closed field is confirmed by the yes/no shortcut in
+    // decide(), which returns before the read-back branch that would have
+    // cleared this - so the field it was confirming stayed pending, and the
+    // answer to the *next* question was read as a late yes to it. On call
+    // bd82d644 that is what ate "Yeah." to "is this number the best one to
+    // reach you on?": the turn re-confirmed the account holder, already
+    // confirmed a moment earlier, and asked the number question a second time.
+    // It only ever showed when the following field was not prefilled too,
+    // because a prefilled one overwrote this on its way past.
+    this.state.awaitingConfirm = [];
     await this.askLine(this.state.render(opts.reask ? field.script.reask : field.script.ask));
   }
 
