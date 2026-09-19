@@ -1,5 +1,5 @@
-import type { FieldValue, Lead } from "@recall/shared";
-import type { SpeakResult, Transport, TransportEndReason, UtteranceMeta } from "./transport.js";
+import type { FieldValue, Lead, TurnTiming } from "@recall/shared";
+import type { AudioMeta, SpeakResult, Transport, TransportEndReason, UtteranceMeta } from "./transport.js";
 import type { SignalReading } from "./escalation.js";
 
 /**
@@ -35,6 +35,7 @@ process.env.ANSWER_REACTION_MS = "0";
 process.env.SANDBOX_URL = "http://127.0.0.1:9";
 
 const { createEngine } = await import("./dialogue.js");
+const { TurnClock } = await import("./turn-clock.js");
 const { env } = await import("../env.js");
 const { loadJourney } = await import("../journey/index.js");
 const { log } = await import("../log.js");
@@ -73,8 +74,14 @@ class FakeLine implements Transport {
 
   async start(): Promise<void> {}
 
-  async speak(text: string, opts: { onFirstAudio?: () => void; interruptible?: boolean } = {}): Promise<SpeakResult> {
+  async speak(
+    text: string,
+    opts: { onFirstAudio?: () => void; onAudioMeta?: (meta: AudioMeta) => void; interruptible?: boolean } = {}
+  ): Promise<SpeakResult> {
     if (this.playing) this.overlaps++;
+    // The fake models a line that never touches ElevenLabs, the way the sim
+    // transport reads a pre-rendered line off disk.
+    opts.onAudioMeta?.({ cached: true, chars: text.length });
     opts.onFirstAudio?.();
     this.spoken.push(text);
     this.interruptible.push(opts.interruptible ?? true);
@@ -171,7 +178,7 @@ function lead(prefill: Record<string, FieldValue>): Lead {
   };
 }
 
-type Captured = { signals: SignalReading[]; handoff: string | null };
+type Captured = { signals: SignalReading[]; handoff: string | null; timings: TurnTiming[] };
 
 function hooks(captured: Captured) {
   return {
@@ -188,13 +195,14 @@ function hooks(captured: Captured) {
     onOutcome: () => {},
     onSubmit: () => {},
     persistField: () => {},
+    onTurnTiming: (timing: TurnTiming) => captured.timings.push(timing),
   };
 }
 
 type Deps = { extract?: Parameters<typeof createEngine>[0]["extract"] };
 
 function scenario(id: string, prefill: Record<string, FieldValue>, deps: Deps = {}) {
-  const captured: Captured = { signals: [], handoff: null };
+  const captured: Captured = { signals: [], handoff: null, timings: [] };
   const line = new FakeLine(id);
   const engine = createEngine({
     callId: id,
@@ -765,6 +773,76 @@ console.log("\n-- the filler and the reply behind it do not talk over each other
   check("the reply follows it rather than landing on top of it", reaskAt > fillerAt, since.join(" | "));
   check("no line overlapped another", line.overlaps === 0, `${line.overlaps} overlap(s)`);
   await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a turn is measured from transcript in hand to audio on the wire");
+{
+  // The defect this whole thing exists for: latency.turn was wired for
+  // EchoEngine only, so the median the rehearsal checklist asserts on had never
+  // been recorded on a journey call.
+  const { line, engine, captured } = scenario("timing", IDENTITY_AND_CONTACT);
+  await engine.begin();
+  // The opener is not a customer turn and is not measured. Start from empty
+  // anyway, so this case cannot pass on something begin() happened to leave.
+  captured.timings.length = 0;
+
+  line.say("my name is Priya Sharma");
+  await line.settle();
+
+  check("one timing event per reply", captured.timings.length === 1, `got ${captured.timings.length}`);
+  const t = captured.timings[0];
+  if (!t) {
+    check("a measured turn reports its stages", false, "no timing event to inspect");
+  } else {
+    check(
+      "the three tiling stages sum to first audio",
+      t.think_ms + t.wire_wait_ms + t.tts_ttfb_ms === t.first_audio_ms,
+      `${t.think_ms} + ${t.wire_wait_ms} + ${t.tts_ttfb_ms} vs ${t.first_audio_ms}`
+    );
+    // The fake line plays instantly, so every stage here is zero. Positive is
+    // not a claim this harness can make; negative is a real defect.
+    check(
+      "no stage is negative",
+      t.think_ms >= 0 && t.wire_wait_ms >= 0 && t.tts_ttfb_ms >= 0 && t.first_audio_ms >= 0,
+      `${t.think_ms} / ${t.wire_wait_ms} / ${t.tts_ttfb_ms} / ${t.first_audio_ms}`
+    );
+    check("a mocked model reports no token count", t.prompt_tokens === null && t.completion_tokens === null);
+    check("a sim line is not counted as live synthesis", t.kind === "cached_line", t.kind);
+  }
+
+  await engine.finalise("incomplete");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n-- a turn that never reached the wire reports nothing");
+{
+  // Driven against the clock directly rather than through the engine: the fake
+  // line stamps first audio the instant speak() is called, so there is no
+  // moment in a scenario at which a barge-in could land before it.
+  const cut = new TurnClock();
+  cut.markDecided();
+  cut.markWireFree();
+  check("a turn cut before any audio emits no timing", cut.finish() === null);
+
+  const whole = new TurnClock();
+  whole.markDecided();
+  whole.markWireFree();
+  whole.markFirstAudio();
+  const t = whole.finish();
+  check("a fully marked clock reports a timing", t !== null);
+  if (t) {
+    check(
+      "its stages tile the turn exactly",
+      t.think_ms + t.wire_wait_ms + t.tts_ttfb_ms === t.first_audio_ms,
+      `${t.think_ms} + ${t.wire_wait_ms} + ${t.tts_ttfb_ms} vs ${t.first_audio_ms}`
+    );
+    check(
+      "no stage is negative",
+      t.think_ms >= 0 && t.wire_wait_ms >= 0 && t.tts_ttfb_ms >= 0,
+      `${t.think_ms} / ${t.wire_wait_ms} / ${t.tts_ttfb_ms}`
+    );
+  }
 }
 
 console.log(failures ? `\n${failures} failure(s).` : "\nAll dialogue checks pass.");

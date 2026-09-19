@@ -1,4 +1,4 @@
-import type { CallOutcome, EscalationSignal, FieldValue, Journey, JourneyField, Lead } from "@recall/shared";
+import type { CallOutcome, EscalationSignal, FieldValue, Journey, JourneyField, Lead, TurnTiming } from "@recall/shared";
 import { env } from "../env.js";
 import { voiceSystemPrompt } from "./voice-prompt.js";
 import { log } from "../log.js";
@@ -10,7 +10,8 @@ import { EscalationDetector, angerPatternMatched, looksLikeDontKnow, redactDigit
 import { extract } from "./extract.js";
 import { normalise, normaliseBool, speakableValue } from "./normalise.js";
 import { submitFinal, submitSection } from "../sandbox/submit.js";
-import type { SpeakResult, Transport, TransportEndReason } from "./transport.js";
+import type { AudioMeta, SpeakResult, Transport, TransportEndReason } from "./transport.js";
+import { TurnClock } from "./turn-clock.js";
 
 /**
  * The per-call loop.
@@ -57,6 +58,8 @@ export type EngineHooks = {
   onSubmit: (step: string, status: number, body: unknown) => void;
   /** Called the instant a field reaches `confirmed`, for the audit trail. */
   persistField: (fieldId: string) => void;
+  /** One turn's measured stages. Not emitted for a turn that never reached the wire. */
+  onTurnTiming: (timing: TurnTiming) => void;
 };
 
 export class DialogueEngine {
@@ -65,6 +68,9 @@ export class DialogueEngine {
 
   /** Cancels the in-flight LLM stream and TTS socket. Barge-in fires this. */
   private turn: AbortController | null = null;
+
+  /** The stopwatch for the customer turn being handled right now, if any. */
+  private clock: TurnClock | null = null;
 
   private silenceTimers: NodeJS.Timeout[] = [];
 
@@ -253,6 +259,9 @@ export class DialogueEngine {
 
   private async handleTurn(raw: string, confidence: number | null, startedAt: number | null): Promise<void> {
     if (this.finalised || this.detector.hasFired) return;
+    // Time zero for this turn: the transcript is in hand and nothing has been
+    // decided yet. Turns run one at a time, so one clock at a time is enough.
+    this.clock = new TurnClock();
     this.clearSilence();
     this.nudges = 0;
 
@@ -298,6 +307,16 @@ export class DialogueEngine {
     } catch (err) {
       log.call(this.callId, `turn failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
+      // Wrapped, because a failed measurement is a lost number and a thrown
+      // measurement is a lost call. The clock is cleared before the hook runs,
+      // so a throwing consumer cannot leave a stale one behind either.
+      try {
+        const timing = this.clock?.finish() ?? null;
+        this.clock = null;
+        if (timing) this.hooks.onTurnTiming(timing);
+      } catch (err) {
+        log.call(this.callId, `turn timing dropped: ${err instanceof Error ? err.message : String(err)}`);
+      }
       this.clearFiller();
       if (!this.finalised && !this.detector.hasFired) this.armSilence();
     }
@@ -357,6 +376,12 @@ export class DialogueEngine {
     // is not covering a pause, it is adding chatter.
     if (!resolvableInCode) this.armFiller();
 
+    // Matched in code, no model round trip. Marked so the dashboard can keep
+    // these out of the model latency statistics entirely: averaged in with the
+    // turns that do call the extractor, a third of the journey's questions drag
+    // the model's own numbers down by an order of magnitude.
+    if (resolvableInCode) this.clock?.markClosedField();
+
     const [extraction, readings] = await Promise.all([
       resolvableInCode
         ? Promise.resolve({ accepted: [], rejected: [], intent: "answer" as const, ms: 0, usage: null })
@@ -391,6 +416,11 @@ export class DialogueEngine {
         return r;
       }),
     ]);
+
+    // What the extraction cost, and what it was billed for. A turn resolved in
+    // code never asked, so it reports null rather than a zero that would read
+    // as an impossibly fast model call.
+    if (!resolvableInCode) this.clock?.noteLlm(extraction.ms, extraction.usage);
 
     // Now that extraction has landed, the detector can tell venting from
     // answering and decide ANGER accordingly.
@@ -1056,6 +1086,10 @@ export class DialogueEngine {
     opts: { generate?: boolean; interruptible?: boolean; onFirstAudio?: () => void } = {}
   ): Promise<SpeakResult> {
     if (this.finalised) return { completed: false, heard: "" };
+    // The reply text exists, so thinking is over. Only the first line of a turn
+    // moves this: a turn that answers and then asks the next question must not
+    // report the second line's decision as the customer's wait.
+    this.clock?.markDecided();
     const controller = new AbortController();
     this.turn = controller;
 
@@ -1074,11 +1108,16 @@ export class DialogueEngine {
         // The transcript is written inside the queue, so it reads in the order
         // the customer heard it rather than the order the engine decided it.
         return await this.onTheWire(async () => {
+          this.clock?.markWireFree();
           const line = this.state.say("agent", text, null);
           this.hooks.onAgentLine(text);
           const result = await this.transport.speak(text, {
             interruptible: opts.interruptible,
-            onFirstAudio: opts.onFirstAudio,
+            onAudioMeta: (meta: AudioMeta) => this.clock?.noteAudio(meta),
+            onFirstAudio: () => {
+              this.clock?.markFirstAudio();
+              opts.onFirstAudio?.();
+            },
           });
           // The record keeps what was heard, not what was scripted.
           if (!result.completed) this.state.cut(line, result.heard);
@@ -1086,16 +1125,40 @@ export class DialogueEngine {
         });
       }
 
-      const spoken = await this.onTheWire(() =>
-        this.transport.speakStream(
-          streamSentences({
-            system: voiceSystemPrompt(this.options.brief),
-            messages: [{ role: "user", content: text }],
-            signal: controller.signal,
-          }),
-          controller.signal
-        )
-      );
+      this.clock?.markGenerated();
+      const generationStarted = Date.now();
+      const spoken = await this.onTheWire(() => {
+        this.clock?.markWireFree();
+        return this.transport.speakStream(
+          // The wrapper stamps the model's first token and nothing else. First
+          // audio comes from the transport, because the model yielding a
+          // sentence happens before TTS has been asked for anything, and
+          // stamping it here would put generation time in a budget judged
+          // against synthesis time.
+          (async function* (self, source: AsyncIterable<string>) {
+            let first = true;
+            for await (const sentence of source) {
+              if (first) {
+                first = false;
+                self.clock?.noteLlmFirstToken(Date.now() - generationStarted);
+              }
+              yield sentence;
+            }
+          })(
+            this,
+            streamSentences({
+              system: voiceSystemPrompt(this.options.brief),
+              messages: [{ role: "user", content: text }],
+              signal: controller.signal,
+            })
+          ),
+          controller.signal,
+          () => {
+            this.clock?.markFirstAudio();
+            opts.onFirstAudio?.();
+          }
+        );
+      });
       if (!controller.signal.aborted) {
         this.state.say("agent", spoken || text, null);
         this.hooks.onAgentLine(spoken || text);

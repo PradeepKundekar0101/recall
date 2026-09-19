@@ -154,6 +154,18 @@ export async function startCall(opts: {
             });
           },
           onSection: (section, field) => bus.emitEvent(callId, { type: "script.section", section, field }),
+          onTurnTiming: (timing) => {
+            bus.emitEvent(callId, { type: "turn.timing", ...timing });
+            // The journey engine has never emitted this. `first_audio_ms` is
+            // exactly the number the rehearsal checklist asserts a median on,
+            // and until now it was measured on echo calls only.
+            bus.emitEvent(callId, {
+              type: "latency.turn",
+              ms: timing.first_audio_ms,
+              utterance: "",
+              over_budget: timing.first_audio_ms > 1000,
+            });
+          },
           onSignals: (readings) => {
             for (const r of readings) {
               bus.emitEvent(callId, {
