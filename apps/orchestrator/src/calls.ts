@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CallOutcome, Journey, Lead } from "@recall/shared";
+import { LATENCY_BUDGET_MS, type CallOutcome, type Journey, type Lead } from "@recall/shared";
 import { env } from "./env.js";
 import { log } from "./log.js";
 import { bus } from "./events.js";
@@ -139,7 +139,7 @@ export async function startCall(opts: {
               type: "latency.turn",
               ms,
               utterance: text.slice(0, 80),
-              over_budget: ms > 1000,
+              over_budget: ms > LATENCY_BUDGET_MS,
             }),
         })
       : new DialogueEngine(callId, journey, lead, transport, {
@@ -169,7 +169,7 @@ export async function startCall(opts: {
               type: "latency.turn",
               ms: timing.first_audio_ms,
               utterance: "",
-              over_budget: timing.first_audio_ms > 1000,
+              over_budget: timing.first_audio_ms > LATENCY_BUDGET_MS,
             });
           },
           onSignals: (readings) => {

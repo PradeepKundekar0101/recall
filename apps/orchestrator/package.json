@@ -21,7 +21,8 @@
     "tts:check": "tsx src/voice/tts.check.ts",
     "usage:check": "tsx src/voice/llm/usage.check.ts",
     "transport:check": "tsx src/transports/twilio.check.ts",
-    "setup:check": "tsx src/leads/setup.check.ts"
+    "setup:check": "tsx src/leads/setup.check.ts",
+    "analytics:check": "tsx src/analytics/aggregate.check.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.126.0",
