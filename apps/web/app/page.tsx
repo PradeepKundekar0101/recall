@@ -78,13 +78,15 @@ export default function OperatorConsole() {
 
         <div>
           <div className="label">Lead</div>
-          <div className="bar-id">{lead ? `${lead.id} · ${lead.full_name}` : "no lead"}</div>
+          {/* The id is already carried by the picker, so the one large element
+              in the bar is the person on the other end of the line. */}
+          <div className="bar-id">{lead ? lead.full_name : "no lead"}</div>
         </div>
 
         <div className="bar-meta">
           <div className="stat">
             <span className="label">Dropped</span>
-            <span className="stat-value">{lead?.last_completed_step ?? "—"}</span>
+            <span className="stat-value">{lead?.last_completed_step ?? "-"}</span>
           </div>
           <div className="stat">
             <span className="label">Status</span>
@@ -100,11 +102,8 @@ export default function OperatorConsole() {
           </div>
           <div className="stat">
             <span className="label">Turn latency</span>
-            <span
-              className="stat-value"
-              style={{ color: overBudget ? "var(--alarm)" : undefined }}
-            >
-              {median === null ? "—" : `${median}ms`}
+            <span className={`stat-value ${overBudget ? "stat-over" : ""}`}>
+              {median === null ? "-" : `${median}ms`}
             </span>
           </div>
           <div className="stat">
@@ -118,17 +117,10 @@ export default function OperatorConsole() {
         <span className="bar-spacer" />
 
         <select
+          className="bar-select"
           value={selectedLead ?? ""}
           onChange={(e) => setSelectedLead(e.target.value)}
           aria-label="Select lead"
-          style={{
-            background: "var(--panel)",
-            color: "var(--ink)",
-            border: "1px solid var(--rule)",
-            borderRadius: "var(--radius)",
-            padding: "6px 8px",
-            font: "inherit",
-          }}
         >
           {leads.map((l) => (
             <option key={l.id} value={l.id}>
@@ -149,7 +141,7 @@ export default function OperatorConsole() {
       </header>
 
       {notice && (
-        <div style={{ padding: "8px 16px", background: "rgba(255,92,92,0.1)", color: "var(--alarm)", borderBottom: "1px solid var(--rule)" }}>
+        <div className="notice" role="status">
           {notice}
         </div>
       )}

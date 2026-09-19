@@ -174,11 +174,39 @@ html, body {
 .bar-btn-go { border-color: var(--live); color: var(--live); }
 .bar-btn:focus-visible { outline: 2px solid var(--st-prefilled); outline-offset: 1px; }
 .stat-value { font-size: 15px; font-variant-numeric: tabular-nums; }
+/* Past a second the call stops feeling like a conversation, so the number that
+   says so turns red. */
+.stat-over { color: var(--alarm); }
+
+/* The lead picker is pre-call chrome - nobody changes lead mid-call - so it
+   reads as a control rather than as another piece of telemetry. */
+.bar-select {
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  font: inherit;
+}
+.bar-select:hover { border-color: var(--ink-faint); }
+.bar-select:focus-visible { outline: 2px solid var(--st-prefilled); outline-offset: 1px; }
+
+/* A refused dial is the one message the operator cannot be allowed to miss. */
+.notice {
+  padding: 8px 16px;
+  background: rgba(255, 92, 92, 0.1);
+  color: var(--alarm);
+  border-bottom: 1px solid var(--rule);
+}
 
 /* The TEST RUN banner is a guardrail made visible, so it is the one piece of
    chrome allowed to shout. Diagonal hazard stripes, not a coloured pill. */
+/* Bound by the same no-wrap rule as the rest of the bar. At the 1440 target it
+   was breaking "TEST RUN . <number>" over three lines, which pushed the bar
+   11px taller and left the one piece of chrome allowed to shout looking broken. */
 .testrun {
-  padding: 5px 12px;
+  white-space: nowrap;
+  padding: 5px 10px;
   border: 1px solid var(--warn);
   border-radius: var(--radius);
   color: var(--warn);
