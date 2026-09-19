@@ -1,7 +1,7 @@
 /**
  * One headline number, with the threshold it is being judged against.
  *
- * The threshold is the point. "1.18s" says nothing on its own; "1.18s against a
+ * The threshold is the point. "1.18s" says nothing on its own; "1.18s against an
  * 800ms budget" is a verdict, and a tile that shows the first without the second
  * is decoration.
  */

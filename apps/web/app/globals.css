@@ -1772,6 +1772,16 @@ a.btn-primary { color: var(--on-primary); }
   gap: 12px;
 }
 
+/* Why the two thresholds above are drawn in grey. Set as a footnote rather than
+   as another Thin plate: the tiles still have their numbers to show, so this is
+   a caveat on them, not a refusal to draw them. */
+.tiles-note {
+  margin: -4px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  max-width: 62ch;
+}
+
 /* The chart takes the width; whatever reads it takes the rest. */
 .analytics-row {
   display: grid;

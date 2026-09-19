@@ -124,6 +124,11 @@ function Dashboard({ data }: { data: AnalyticsResponse }) {
   const budget = data.latency.budget_ms;
   const p50 = data.latency.first_audio?.p50 ?? null;
   const handsFree = data.accuracy.hands_free_rate;
+  // The page's whole argument is that a number without its population is not a
+  // verdict, and that holds for the tiles as much as for the trend. Under the
+  // threshold the numbers and their meters still show - they are what was
+  // measured - but neither is coloured as a pass or a fail.
+  const judged = !data.thin;
 
   return (
     <>
@@ -132,14 +137,14 @@ function Dashboard({ data }: { data: AnalyticsResponse }) {
           label="Median time to reply"
           value={ms(p50)}
           sub={`against an ${budget}ms budget`}
-          tone={p50 === null ? "neutral" : p50 <= budget ? "good" : "bad"}
+          tone={p50 === null || !judged ? "neutral" : p50 <= budget ? "good" : "bad"}
           meter={p50 === null ? null : p50 / budget}
         />
         <StatTile
           label="Hands free"
           value={pct(handsFree)}
           sub={`${data.accuracy.hands_free_captured} of ${data.accuracy.hands_free_total} fields, the bar is ${pct(HANDS_FREE_BAR)}`}
-          tone={handsFree === null ? "neutral" : handsFree >= HANDS_FREE_BAR ? "good" : "warn"}
+          tone={handsFree === null || !judged ? "neutral" : handsFree >= HANDS_FREE_BAR ? "good" : "warn"}
           meter={handsFree}
         />
         <StatTile
@@ -160,6 +165,15 @@ function Dashboard({ data }: { data: AnalyticsResponse }) {
           tone="neutral"
         />
       </div>
+
+      {/* Said once, quietly, rather than repeated into every tile's sub: the two
+          tiles that carry a threshold are the ones the grey is about. */}
+      {!judged && (
+        <p className="tiles-note">
+          {data.totals.calls} {data.totals.calls === 1 ? "call" : "calls"} in this window. A verdict needs at least{" "}
+          {data.thin_threshold}, so the numbers above are drawn without one.
+        </p>
+      )}
 
       <div className="analytics-row">
         <section className="card">

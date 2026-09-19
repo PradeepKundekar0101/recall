@@ -30,9 +30,10 @@ export function Nav({ phase, children }: { phase?: Phase; children?: ReactNode }
       </Link>
       <nav className="nav-links" aria-label="Views">
         {VIEWS.map((view) => {
-          // A call's own page lives under /calls, and the operator who opened it
-          // from the list is still in the list as far as the nav is concerned.
-          const current = pathname === view.href || pathname.startsWith(`${view.href}/`);
+          // Exact, not a prefix. A call's own page is under /calls but is not the
+          // list, and this link is the only way back to it: marking it current
+          // there would tell a screen reader there is no list to go to.
+          const current = pathname === view.href;
           return (
             <Link
               key={view.href}
