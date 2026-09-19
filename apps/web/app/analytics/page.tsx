@@ -272,7 +272,15 @@ function Dashboard({ data }: { data: AnalyticsResponse }) {
         <section className="card">
           <header className="card-lede">
             <h2 className="card-title">Usage</h2>
-            <p className="card-sub">What the window cost the two vendors.</p>
+            {/* A floor, not a total, and it says so. The turn clock keeps only
+                the first line of a turn and only exists inside handleTurn, so
+                the opener, every filler, every follow-up line and the closing
+                line contribute nothing. Completing the count is an
+                instrumentation change; claiming this is the bill is a lie. */}
+            <p className="card-sub">
+              The first line of each measured turn. Openers, fillers, follow-up lines and the sign-off are not
+              measured, so these are floors rather than what the window actually cost.
+            </p>
           </header>
           <ul className="usage-list">
             <li>

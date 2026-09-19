@@ -125,6 +125,13 @@ export function CallTiming({ timings, budgetMs = LATENCY_BUDGET_MS }: { timings:
             </li>
           </ul>
 
+          {/* Same floor as the dashboard's Usage card, for the same reason: the
+              clock keeps the first line of a turn and nothing else. */}
+          <p className="chart-caption">
+            Counted from the first line of each measured turn, so the opener, the fillers and the sign-off are not in
+            these figures.
+          </p>
+
           <p className="chart-caption">
             Transcript in hand to the first audio of the reply. A filler line can play before that, so this is not how
             long the line was silent.
