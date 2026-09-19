@@ -161,6 +161,18 @@ function report(over: Partial<{ calls: CallLite[]; turns: TurnRow[]; fieldEvents
   check("a turn with no model is not a model key", Object.keys(r.usage.by_model).length === 1, JSON.stringify(Object.keys(r.usage.by_model)));
 }
 
+// ---- a NaN token count is not a finite number either, and must not poison the total
+// (`typeof x === "number"` alone admits NaN; only Number.isFinite catches it)
+{
+  const r = report({
+    turns: [
+      turn({ prompt_tokens: 100, completion_tokens: 10 }),
+      turn({ prompt_tokens: NaN, completion_tokens: NaN }),
+    ],
+  });
+  check("a NaN token count does not reach the grand total", r.usage.prompt_tokens === 100 && r.usage.completion_tokens === 10, `${r.usage.prompt_tokens}/${r.usage.completion_tokens}`);
+}
+
 // ---- by_model, including the calls counter, and a second model getting its own row
 {
   const r = report({
@@ -282,6 +294,24 @@ function report(over: Partial<{ calls: CallLite[]; turns: TurnRow[]; fieldEvents
     postcode?.asked === 1 && postcode?.captured_first_try === 0,
     JSON.stringify(postcode)
   );
+}
+
+// ---- mean_confidence is computed over the same population as asked, not every event
+// (regression: confidence used to be collected across every field.update for the
+// field, including events from pairs the asking-gate excludes - a numerator over
+// one population and a denominator over another)
+{
+  const events: FieldEventRow[] = [
+    // Call "a": prefilled and confirmed, never asked. Excluded from `asked`.
+    { call_id: "a", field: "plan_name", state: "prefilled", confidence: null, attempts: 0 },
+    { call_id: "a", field: "plan_name", state: "confirmed", confidence: 0.5, attempts: 0 },
+    // Call "b": genuinely asked and confirmed. Included in `asked`.
+    { call_id: "b", field: "plan_name", state: "asking", confidence: null, attempts: 0 },
+    { call_id: "b", field: "plan_name", state: "confirmed", confidence: 0.9, attempts: 0 },
+  ];
+  const r = report({ calls: [call({ id: "a" }), call({ id: "b" })], fieldEvents: events });
+  const planName = r.fields.find((f) => f.id === "plan_name");
+  check("mean_confidence reflects only the pair that was actually asked", planName?.asked === 1 && planName?.mean_confidence === 0.9, JSON.stringify(planName));
 }
 
 // ---- a redacted field is asked but never a capture, and is still tallied redacted

@@ -53,9 +53,14 @@ function numbers<T>(rows: T[], pick: (row: T) => number | null): number[] {
   const out: number[] = [];
   for (const row of rows) {
     const value = pick(row);
-    if (typeof value === "number" && Number.isFinite(value)) out.push(value);
+    if (isFiniteNumber(value)) out.push(value);
   }
   return out;
+}
+
+/** `typeof x === "number"` alone admits NaN, which would poison any sum it reaches. */
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 function day(iso: string): string {
@@ -90,9 +95,8 @@ function fieldStats(events: AnalyticsInput["fieldEvents"]): FieldStat[] {
   // one field, not about the field across the whole window.
   const perCall = new Map<
     string,
-    { field: string; attempts: number; redacted: boolean; reachedAsking: boolean; reachedCaptureEnd: boolean }
+    { field: string; attempts: number; redacted: boolean; reachedAsking: boolean; reachedCaptureEnd: boolean; confidences: number[] }
   >();
-  const confidences = new Map<string, number[]>();
 
   for (const event of events) {
     const key = `${event.call_id}:${event.field}`;
@@ -102,6 +106,7 @@ function fieldStats(events: AnalyticsInput["fieldEvents"]): FieldStat[] {
       redacted: false,
       reachedAsking: false,
       reachedCaptureEnd: false,
+      confidences: [],
     };
     seen.attempts = Math.max(seen.attempts, event.attempts);
     if (event.state === "redacted") seen.redacted = true;
@@ -114,17 +119,20 @@ function fieldStats(events: AnalyticsInput["fieldEvents"]): FieldStat[] {
     // web journey had already filled in, not fields the agent actually won.
     if (event.state === "asking") seen.reachedAsking = true;
     if (event.state === "confirmed" || event.state === "submitted") seen.reachedCaptureEnd = true;
+    if (isFiniteNumber(event.confidence)) seen.confidences.push(event.confidence);
     perCall.set(key, seen);
-
-    if (typeof event.confidence === "number" && Number.isFinite(event.confidence)) {
-      const list = confidences.get(event.field) ?? [];
-      list.push(event.confidence);
-      confidences.set(event.field, list);
-    }
   }
 
   const byField = new Map<string, FieldStat>();
+  const confidencesByField = new Map<string, number[]>();
   for (const seen of perCall.values()) {
+    // Confidence is folded in here, inside the same gate as every other
+    // column, and only from pairs kept by it - not collected across every
+    // event up front. asked, captured_first_try and re_asks already describe
+    // only asked pairs; a mean_confidence built from the full event stream
+    // would average in a prefilled-and-confirmed pair's confidence while the
+    // row's own asked count excludes that pair, a numerator over one
+    // population divided by a denominator over another.
     if (!seen.reachedAsking) continue;
     const stat =
       byField.get(seen.field) ??
@@ -134,9 +142,13 @@ function fieldStats(events: AnalyticsInput["fieldEvents"]): FieldStat[] {
     stat.re_asks += seen.attempts;
     if (seen.redacted) stat.redacted += 1;
     byField.set(seen.field, stat);
+
+    const list = confidencesByField.get(seen.field) ?? [];
+    list.push(...seen.confidences);
+    confidencesByField.set(seen.field, list);
   }
 
-  for (const [field, list] of confidences) {
+  for (const [field, list] of confidencesByField) {
     const stat = byField.get(field);
     if (stat && list.length) stat.mean_confidence = list.reduce((a, b) => a + b, 0) / list.length;
   }
@@ -191,7 +203,7 @@ export function buildAnalytics(input: AnalyticsInput): AnalyticsResponse {
   let handsFreeCaptured = 0;
   let handsFreeTotal = 0;
   for (const c of calls) {
-    if (typeof c.fields_hands_free !== "number" || typeof c.fields_total !== "number") continue;
+    if (!isFiniteNumber(c.fields_hands_free) || !isFiniteNumber(c.fields_total)) continue;
     handsFreeCaptured += c.fields_hands_free;
     handsFreeTotal += c.fields_total;
   }
@@ -211,7 +223,7 @@ export function buildAnalytics(input: AnalyticsInput): AnalyticsResponse {
     // Likewise a model can be known on a turn whose token counts did not land;
     // that turn still counts as a call against the model, it just does not
     // contribute tokens to that model's row.
-    const hasTokens = typeof t.prompt_tokens === "number" && typeof t.completion_tokens === "number";
+    const hasTokens = isFiniteNumber(t.prompt_tokens) && isFiniteNumber(t.completion_tokens);
     if (hasTokens) {
       promptTokens += t.prompt_tokens as number;
       completionTokens += t.completion_tokens as number;
