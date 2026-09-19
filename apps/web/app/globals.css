@@ -14,12 +14,19 @@
   --rule: #24314a;
   --rule-soft: #1d2740;
 
+  /* The ink ramp is sized for a projector rather than a monitor. Every step
+     clears WCAG AA against --panel-2, the lightest surface any of it sits on:
+     measured 12.9 / 6.8 / 4.7. The previous ramp bottomed out at 2.7, which is
+     where every 11px label lived, and low contrast is the first thing a
+     projector washes out. */
   --ink: #e6edf7;
-  --ink-dim: #8296b4;
-  --ink-faint: #56698a;
+  --ink-dim: #98afd2;
+  --ink-faint: #7690bd;
 
   /* Field states. Fixed by the brief; everything else defers to them. */
-  --st-empty: #5a6b85;
+  /* Empty is the one state that is an absence, so it stays the quietest of the
+     seven - but it still has to clear 3:1 as a border to be seen at all. */
+  --st-empty: #687c9a;
   --st-prefilled: #4c8dff;
   --st-asking: #f0a93b;
   --st-captured: #f0a93b;
