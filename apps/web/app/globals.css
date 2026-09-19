@@ -76,6 +76,14 @@ html, body {
   margin: 0 auto;
 }
 
+/* Grid items default to min-width:auto, so a row full of nowrap content grows to
+   its min-content width and overflows this container rather than being bounded
+   by it. That is what pushed the console sideways and clipped the escalation
+   pane off the right edge the moment a call ended: the bar measured 1740px
+   inside a 1440px shell, and because the flex container then exactly fitted its
+   own contents, no amount of flex-shrink on its children could ever apply. */
+.console > * { min-width: 0; }
+
 .panes {
   display: grid;
   grid-template-columns: 30fr 40fr 30fr;
@@ -85,6 +93,9 @@ html, body {
 }
 
 .pane {
+  /* Same reason as .console > *: one long unbroken transcript token must not be
+     able to widen its column and squeeze the other two. */
+  min-width: 0;
   background: var(--panel);
   display: flex;
   flex-direction: column;
