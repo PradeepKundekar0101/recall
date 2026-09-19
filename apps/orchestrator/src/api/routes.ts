@@ -14,6 +14,8 @@ import { cachedLineCount } from "../voice/tts.js";
 import { Readable } from "node:stream";
 import type { CallEvent, CallSummary } from "@recall/shared";
 import { callEvents, getCallRow, listCalls, setRecording, type CallRow } from "../db/repo.js";
+import { loadAnalytics } from "../analytics/query.js";
+import type { AnalyticsSource, AnalyticsWindow } from "../analytics/types.js";
 
 export const api = Router();
 
@@ -389,6 +391,31 @@ api.get("/calls", async (req, res) => {
     .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))
     .slice(0, limit);
   res.json({ calls });
+});
+
+const WINDOWS: AnalyticsWindow[] = ["24h", "7d", "30d", "all"];
+
+/**
+ * The whole analytics dashboard in one response.
+ *
+ * One request rather than four, because the page is one screen: a single
+ * loading state and no waterfall. Everything is computed from the audit trail,
+ * so this endpoint is read-only and cannot affect a call.
+ */
+api.get("/analytics", async (req, res) => {
+  const windowParam = String(req.query.window ?? "7d");
+  const window = (WINDOWS as string[]).includes(windowParam) ? (windowParam as AnalyticsWindow) : "7d";
+  const source: AnalyticsSource = String(req.query.source ?? "dialled") === "all" ? "all" : "dialled";
+
+  try {
+    res.json(await loadAnalytics(window, source));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // 503 rather than 500: the orchestrator is fine, its audit database is not,
+    // and the page says exactly that instead of rendering zeroes that read as
+    // real measurements.
+    res.status(503).json({ error: `analytics unavailable: ${message}` });
+  }
 });
 
 /**
