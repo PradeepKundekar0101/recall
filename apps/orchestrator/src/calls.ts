@@ -70,7 +70,13 @@ export async function startCall(opts: {
   // The calls row is written before any event references it. call_events has a
   // foreign key onto it, so emitting first meant every event on a new call failed
   // its insert - the audit trail was losing the opening of every single call.
-  await openCall({ callId, lead, journeyId: journey.id, testRun: true });
+  await openCall({
+    callId,
+    lead,
+    journeyId: journey.id,
+    testRun: true,
+    simulated: env.transport !== "pstn" || env.mockVoice,
+  });
 
   bus.emitEvent(callId, {
     type: "call.hello",

@@ -43,11 +43,14 @@ create table if not exists calls (
   fields_hands_free integer,
   fields_total      integer,
   recording_url  text,
-  test_run       boolean     not null default true
+  test_run       boolean     not null default true,
+  -- Whether a phone actually rang. See sql/0002_add_simulated.sql.
+  simulated      boolean     not null default true
 );
 
 create index if not exists calls_lead_idx on calls (lead_id);
 create index if not exists calls_started_idx on calls (started_at desc);
+create index if not exists calls_simulated_started_idx on calls (simulated, started_at desc);
 
 -- One row per transcript line, field transition and guardrail trigger.
 create table if not exists call_events (

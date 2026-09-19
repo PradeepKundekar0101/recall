@@ -15,6 +15,8 @@ export async function openCall(opts: {
   lead: Lead;
   journeyId: string;
   testRun: boolean;
+  /** False only when a phone actually rang: pstn transport with real voice. */
+  simulated: boolean;
 }): Promise<void> {
   const client = sb();
   if (!client) return;
@@ -25,6 +27,7 @@ export async function openCall(opts: {
     journey_id: opts.journeyId,
     status: "queued" satisfies CallStatus,
     test_run: opts.testRun,
+    simulated: opts.simulated,
   });
   if (error) log.warn(`repo.openCall: ${error.message}`);
 }
@@ -144,10 +147,11 @@ export type CallRow = {
   fields_total: number | null;
   recording_url: string | null;
   test_run: boolean;
+  simulated: boolean;
 };
 
 const CALL_COLUMNS =
-  "id, lead_id, status, outcome, handoff_reason, started_at, ended_at, duration_s, fields_hands_free, fields_total, recording_url, test_run";
+  "id, lead_id, status, outcome, handoff_reason, started_at, ended_at, duration_s, fields_hands_free, fields_total, recording_url, test_run, simulated";
 
 /** Only a real id reaches Postgres: a uuid column rejects anything else with an error, not an empty result. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

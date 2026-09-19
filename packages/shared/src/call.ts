@@ -180,6 +180,8 @@ export type CallSummary = {
   fields_total: number | null;
   has_recording: boolean;
   test_run: boolean;
+  /** False only when a phone actually rang. Analytics excludes simulated calls by default. */
+  simulated: boolean;
   /** Whether this orchestrator process is still running the call. */
   live: boolean;
 };

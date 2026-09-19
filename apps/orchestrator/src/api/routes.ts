@@ -316,6 +316,7 @@ function summaryFromEvents(callId: string, events: CallEvent[]): CallSummary | n
     fields_total: null,
     has_recording: false,
     test_run: true,
+    simulated: true,
     live: getCall(callId) !== undefined,
   };
   for (const event of events) {
@@ -324,6 +325,7 @@ function summaryFromEvents(callId: string, events: CallEvent[]): CallSummary | n
         summary.lead_id = event.lead.id;
         summary.lead_name = event.lead.full_name;
         summary.test_run = event.test_run;
+        summary.simulated = event.simulated ?? true;
         break;
       case "call.status":
         summary.status = event.status;
@@ -361,6 +363,7 @@ function summaryFromRow(row: CallRow): CallSummary {
     fields_total: row.fields_total,
     has_recording: Boolean(row.recording_url) || recordings.has(row.id),
     test_run: row.test_run,
+    simulated: row.simulated,
     live: getCall(row.id) !== undefined,
   };
 }
