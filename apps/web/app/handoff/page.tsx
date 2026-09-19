@@ -5,6 +5,7 @@ import type { Journey } from "@recall/shared";
 import { getJson } from "../../lib/api";
 import { blankForm, useCallStream } from "../../lib/useCallStream";
 import { JourneyForm } from "../../components/JourneyForm";
+import { TurnLine, customerOf } from "../../components/Transcript";
 
 /**
  * The human handoff console.
@@ -31,12 +32,13 @@ export default function HandoffConsole() {
   const packet = call.handoff?.packet ?? null;
   const form = Object.keys(call.form).length ? call.form : blankForm(journey);
   const recent = call.transcript.slice(-5);
+  const customer = customerOf(call.lead?.full_name);
 
   if (!callId) {
     return (
       <main className="handoff">
         <div className="label">Handoff console</div>
-        <h1 className="bar-id handoff-title">Waiting for a transfer</h1>
+        <h1 className="handoff-title">Waiting for a transfer</h1>
         <div className="handoff-idle">
           Open this with a call id to watch a call and catch its packet the moment
           one fires, for example <code>/handoff?call=&lt;call-id&gt;</code>. The operator
@@ -49,7 +51,7 @@ export default function HandoffConsole() {
   return (
     <main className="handoff">
       <div className="label">Handoff console</div>
-      <h1 className="bar-id handoff-title">
+      <h1 className="handoff-title">
         {call.lead ? `${call.lead.full_name} · ${call.lead.id}` : callId}
       </h1>
 
@@ -57,9 +59,7 @@ export default function HandoffConsole() {
         <div className="handoff-reason">
           <div className="label">Escalated · {packet.reason.replace(/_/g, " ")}</div>
           <div className="handoff-evidence">&ldquo;{packet.evidence}&rdquo;</div>
-          <div className="meter-score handoff-elapsed">
-            {packet.duration_s}s on the line before the transfer
-          </div>
+          <div className="handoff-elapsed">{packet.duration_s}s on the line before the transfer</div>
         </div>
       ) : (
         <p className="empty">
@@ -76,7 +76,7 @@ export default function HandoffConsole() {
       )}
 
       <div className="handoff-grid">
-        <section>
+        <section className="card">
           <div className="section-head">
             <span className="label">Already collected</span>
             <span className="section-rule" />
@@ -84,19 +84,21 @@ export default function HandoffConsole() {
           <JourneyForm journey={journey} form={packet?.fields ?? form} />
         </section>
 
-        <section>
+        <section className="card">
           <div className="section-head">
             <span className="label">Last five lines</span>
             <span className="section-rule" />
           </div>
           {recent.length ? (
             recent.map((line, i) => (
-              <div className={`turn turn-${line.speaker}`} key={`${line.at}-${i}`}>
-                <div className="turn-head">
-                  <span className="turn-who">{line.speaker}</span>
-                </div>
-                <div className="turn-text">{line.text}</div>
-              </div>
+              <TurnLine
+                key={`${line.at}-${i}`}
+                speaker={line.speaker}
+                text={line.text}
+                at={line.at}
+                confidence={line.confidence}
+                customer={customer}
+              />
             ))
           ) : (
             <p className="empty">Nothing said yet.</p>
