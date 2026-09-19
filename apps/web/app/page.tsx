@@ -76,7 +76,7 @@ export default function OperatorConsole() {
           <span className="wordmark-sub">recovery call</span>
         </div>
 
-        <div>
+        <div className="bar-lead">
           <div className="label">Lead</div>
           {/* The id is already carried by the picker, so the one large element
               in the bar is the person on the other end of the line. */}
@@ -88,7 +88,7 @@ export default function OperatorConsole() {
             <span className="label">Dropped</span>
             <span className="stat-value">{lead?.last_completed_step ?? "-"}</span>
           </div>
-          <div className="stat">
+          <div className="stat stat-status">
             <span className="label">Status</span>
             <span className="stat-value">
               <span className={`status-dot status-${call.status}`} />

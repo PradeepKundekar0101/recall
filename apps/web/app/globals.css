@@ -79,9 +79,9 @@ html, body {
 /* Grid items default to min-width:auto, so a row full of nowrap content grows to
    its min-content width and overflows this container rather than being bounded
    by it. That is what pushed the console sideways and clipped the escalation
-   pane off the right edge the moment a call ended: the bar measured 1740px
-   inside a 1440px shell, and because the flex container then exactly fitted its
-   own contents, no amount of flex-shrink on its children could ever apply. */
+   pane when a call ended: the bar was 1740px wide inside a 1440px shell, and
+   because the flex container then exactly fitted its own contents, none of the
+   flex-shrink below could ever take effect. */
 .console > * { min-width: 0; }
 
 .panes {
@@ -93,8 +93,8 @@ html, body {
 }
 
 .pane {
-  /* Same reason as .console > *: one long unbroken transcript token must not be
-     able to widen its column and squeeze the other two. */
+  /* Same reason as .console > *: a long unbroken transcript token must not be
+     allowed to widen its column and squeeze the other two. */
   min-width: 0;
   background: var(--panel);
   display: flex;
@@ -125,7 +125,7 @@ html, body {
 .bar {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 14px;
   padding: 12px 16px;
   background: var(--panel-2);
   border-bottom: 1px solid var(--rule);
@@ -169,6 +169,30 @@ html, body {
 .bar .stat-value { white-space: nowrap; }
 
 .bar-spacer { flex: 1; }
+
+/* The bar may not wrap, so something has to give when a value grows. The status
+   gains "- disconnected" the moment a call ends, and that alone put the bar 54px
+   past a 1440 viewport: with every child nowrap and nothing allowed to shrink,
+   the overflow pushed the whole console sideways and clipped the escalation
+   pane off the right edge. Forbidding the wrap had only traded jitter for that.
+   The picker gives way first because it is chrome, then the lead name. The
+   telemetry never gives way. */
+/* The picker absorbs essentially all of it: heavily weighted to shrink, with a
+   floor that still shows a lead id. The lead name only gives way once the
+   picker has nothing left, which takes a name far longer than a real one. */
+.bar-select { min-width: 9ch; flex: 0 100 auto; }
+.bar-lead { min-width: 0; flex: 0 1 auto; }
+.bar-lead .bar-id { overflow: hidden; text-overflow: ellipsis; }
+.bar-meta,
+.testrun,
+.bar-btn { flex: 0 0 auto; }
+
+/* Reserved for the statuses that arrive while the call is running (dialling,
+   answered, live), so nothing shifts during the call. Deliberately NOT reserved
+   for "ended - disconnected": that arrives once, after the call is over, and
+   reserving 22ch for it truncated an ordinary lead name for the whole call to
+   save one reflow nobody is watching by then. */
+.stat-status .stat-value { min-width: 10ch; }
 
 .stat { display: flex; flex-direction: column; gap: 2px; }
 .bar-btn {
